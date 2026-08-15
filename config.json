@@ -1,0 +1,26 @@
+{
+  "library": {
+    "funscripts_dir": "funscripts",
+    "images_dir": "images",
+    "metadata_dir": "metadata",
+    "cache_dir": "cache",
+    "logs_dir": "logs",
+    "database": "storage/library.db",
+    "index_file": "index.json"
+  },
+  "github": {
+    "enabled": false,
+    "auto_push": false,
+    "raw_base_url": "https://raw.githubusercontent.com/leejorz/xtoys-library/main/funscripts/"
+  },
+  "eroscripts": {
+    "enabled": false
+  },
+  "video_sources": {
+    "xtoys_supported_sites": [
+      "eporner.com",
+      "rule34video.com",
+      "noodledude.io"
+    ]
+  }
+}
