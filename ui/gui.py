@@ -14,7 +14,7 @@ class LibraryGUI:
         self.application = application
         self.root = tk.Tk()
         self.root.title("xToys Library Manager")
-        self.root.geometry("560x420")
+        self.root.geometry("560x500")
         self.root.minsize(500, 360)
 
         self.status_var = tk.StringVar(value="Ready")
@@ -53,8 +53,33 @@ class LibraryGUI:
         actions.columnconfigure(1, weight=1)
 
         status = ttk.LabelFrame(outer, text="Status", padding=10)
-        status.pack(fill="x", side="bottom", pady=(24, 0))
-        ttk.Label(status, textvariable=self.status_var).pack(anchor="w")
+        status.pack(fill="both", side="bottom", pady=(24, 0))
+
+        ttk.Label(
+            status,
+            textvariable=self.status_var,
+            font=("TkDefaultFont", 10, "bold"),
+        ).pack(anchor="w", pady=(0, 6))
+
+        activity_frame = ttk.Frame(status)
+        activity_frame.pack(fill="both", expand=True)
+
+        self.activity_text = tk.Text(
+            activity_frame,
+            height=5,
+            wrap="word",
+            state="disabled",
+            relief="sunken",
+            borderwidth=1,
+        )
+        activity_scroll = ttk.Scrollbar(
+            activity_frame,
+            orient="vertical",
+            command=self.activity_text.yview,
+        )
+        self.activity_text.configure(yscrollcommand=activity_scroll.set)
+        self.activity_text.pack(side="left", fill="both", expand=True)
+        activity_scroll.pack(side="right", fill="y")
 
     @staticmethod
     def _button(parent, text, command, row, column):
@@ -72,8 +97,28 @@ class LibraryGUI:
         except Exception:
             self.count_var.set("Library: unavailable")
 
-    def set_status(self, text):
+    def clear_activity(self):
+        self.activity_text.config(state="normal")
+        self.activity_text.delete("1.0", "end")
+        self.activity_text.config(state="disabled")
+        self.root.update_idletasks()
+
+    def append_activity(self, text):
+        from datetime import datetime
+
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        self.activity_text.config(state="normal")
+        self.activity_text.insert("end", f"[{timestamp}] {text}\n")
+        self.activity_text.see("end")
+        self.activity_text.config(state="disabled")
+        self.root.update_idletasks()
+
+    def set_status(self, text, activity=None, clear=False):
         self.status_var.set(text)
+        if clear:
+            self.clear_activity()
+        if activity:
+            self.append_activity(activity)
         self.root.update_idletasks()
 
     def add_funscript(self):
@@ -465,29 +510,52 @@ class LibraryGUI:
             messagebox.showerror("Add Funscript Failed", str(error), parent=self.root)
 
     def rebuild_library(self):
+        self.clear_activity()
+        self.set_status("Rebuilding library...", "Starting funscript scan...")
         try:
-            self.application.rebuild_library()
+            result = self.application.rebuild_library(
+                progress_callback=self.append_activity
+            )
             self.refresh_count()
-            self.set_status("Library rebuilt successfully.")
+            self.set_status(
+                "Library rebuilt successfully.",
+                f"Complete: {result['scripts_found']} scripts found; "
+                f"{result['new']} new, {result['renamed']} renamed, "
+                f"{result['unchanged']} unchanged.",
+            )
         except Exception as error:
-            self.set_status("Library rebuild failed")
+            self.set_status("Library rebuild failed", f"ERROR: {error}")
             messagebox.showerror("Rebuild Failed", str(error), parent=self.root)
 
     def build_index(self):
+        self.clear_activity()
+        self.set_status("Building index.json...", "Starting index generation...")
         try:
-            self.application.build_index()
-            self.set_status("index.json generated successfully.")
+            result = self.application.build_index(
+                progress_callback=self.append_activity
+            )
+            self.set_status(
+                "index.json generated successfully.",
+                f"Complete: {result['count']} videos written to {result['path']}.",
+            )
         except Exception as error:
-            self.set_status("Index generation failed")
+            self.set_status("Index generation failed", f"ERROR: {error}")
             messagebox.showerror("Build Index Failed", str(error), parent=self.root)
 
     def validate_library(self):
+        self.clear_activity()
+        self.set_status("Validating library...", "Starting library validation...")
         try:
-            self.application.validate_library()
+            valid = self.application.validate_library(
+                progress_callback=self.append_activity
+            )
             self.refresh_count()
-            self.set_status("Library validation completed successfully.")
+            if valid:
+                self.set_status("Library validation completed successfully.", "VALIDATION PASSED.")
+            else:
+                self.set_status("Library validation found problems.", "VALIDATION FAILED.")
         except Exception as error:
-            self.set_status("Validation failed")
+            self.set_status("Validation failed", f"ERROR: {error}")
             messagebox.showerror("Validation Failed", str(error), parent=self.root)
 
     def publish_to_github(self):

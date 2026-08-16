@@ -73,13 +73,19 @@ class Application:
                 "Application stopped"
             )
 
-    def rebuild_library(self):
+    def rebuild_library(self, progress_callback=None):
+
+        def progress(message):
+            if progress_callback:
+                progress_callback(message)
 
         scanner = LibraryScanner(
             self.root / self.config.funscripts_dir
         )
 
+        progress("Scanning .funscript files...")
         scanned = scanner.scan()
+        progress(f"Found {len(scanned)} funscript file(s).")
 
         new_count = 0
         rename_count = 0
@@ -113,6 +119,11 @@ class Application:
 
                 unchanged_count += 1
 
+        progress(
+            f"Database update complete: {new_count} new, {rename_count} renamed, "
+            f"{unchanged_count} unchanged."
+        )
+
         print(
             "\nLibrary rebuilt successfully.\n"
         )
@@ -133,7 +144,20 @@ class Application:
             f"Unchanged     : {unchanged_count}"
         )
 
-    def build_index(self):
+        return {
+            "scripts_found": len(scanned),
+            "new": new_count,
+            "renamed": rename_count,
+            "unchanged": unchanged_count,
+        }
+
+    def build_index(self, progress_callback=None):
+
+        def progress(message):
+            if progress_callback:
+                progress_callback(message)
+
+        progress("Reading library records...")
 
         builder = IndexBuilder(
             self.root,
@@ -141,7 +165,9 @@ class Application:
             self.config
         )
 
+        progress("Generating index.json...")
         output_path, count = builder.build()
+        progress(f"Generated {count} video object(s).")
 
         print(
             "\nIndex generated successfully.\n"
@@ -155,12 +181,22 @@ class Application:
             f"Output : {output_path}"
         )
 
-    def validate_library(self) -> bool:
+        return {
+            "path": str(output_path),
+            "count": count,
+        }
+
+    def validate_library(self, progress_callback=None) -> bool:
         """
         Validate the library and optionally clean stale database
         records. This operation never deletes .funscript files.
         """
+        def progress(message):
+            if progress_callback:
+                progress_callback(message)
+
         connection = self.database.connect()
+        progress("Checking files on disk...")
         funscripts_dir = self.root / self.config.funscripts_dir
 
         disk_files = {
@@ -170,6 +206,7 @@ class Application:
         }
 
         scripts = self.database.all_scripts()
+        progress(f"Checking {len(scripts)} database script record(s)...")
         db_filenames = {
             script["filename"]
             for script in scripts
@@ -188,6 +225,7 @@ class Application:
             key=str.lower
         )
 
+        progress("Checking database relationships...")
         orphan_script_tags = connection.execute(
             """
             SELECT COUNT(*)
@@ -238,6 +276,7 @@ class Application:
             """
         ).fetchone()[0]
 
+        progress("Checking index.json...")
         index_errors = []
         index_path = self.root / self.config.index_file
 
@@ -270,6 +309,7 @@ class Application:
                 # Multiple scripts may intentionally point to the same video
                 # source, so compare against scripts-with-source rather than
                 # the number of unique site/video-ID pairs.
+                expected_count = len(scripts)
                 if len(indexed) != expected_count:
                     index_errors.append(
                         "Index video count does not match database: "
@@ -351,6 +391,8 @@ class Application:
             print("\nIndex problems:")
             for error in index_errors:
                 print(f"  ERROR: {error}")
+
+        progress("Validation checks complete.")
 
         has_cleanup = bool(
             stale_scripts
