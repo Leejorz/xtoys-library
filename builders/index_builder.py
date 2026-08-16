@@ -2,7 +2,7 @@ import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 
 class IndexBuilder:
@@ -111,7 +111,7 @@ class IndexBuilder:
 
         if video_source:
 
-            site = (
+            site = self.normalize_site(
                 video_source["site"]
                 or ""
             )
@@ -121,6 +121,9 @@ class IndexBuilder:
                 or ""
             )
 
+            # "source_url" is the EroScripts/source page URL stored for
+            # this script. Keep it as the library's public URL; do not
+            # replace it with the detected video-host URL.
             source_url = self.normalize_url(
                 video_source["source_url"]
             )
@@ -169,6 +172,38 @@ class IndexBuilder:
 
             "displayName": display_name
         }
+
+    @staticmethod
+    def normalize_site(
+        site: str | None
+    ) -> str:
+
+        if not site:
+            return ""
+
+        site = site.strip().lower()
+
+        # The xToys index uses site identifiers such as "spankbang"
+        # rather than full hostnames such as "spankbang.com".
+        known_sites = {
+            "spankbang.com": "spankbang",
+            "www.spankbang.com": "spankbang",
+            "pornhub.com": "pornhub",
+            "www.pornhub.com": "pornhub",
+            "xvideos.com": "xvideos",
+            "www.xvideos.com": "xvideos",
+            "xhamster.com": "xhamster",
+            "www.xhamster.com": "xhamster",
+            "eporner.com": "eporner",
+            "www.eporner.com": "eporner",
+            "rule34video.com": "rule34video",
+            "www.rule34video.com": "rule34video",
+            "redgifs.com": "redgifs",
+            "www.redgifs.com": "redgifs",
+        }
+
+        return known_sites.get(site, site)
+
 
     @staticmethod
     def normalize_url(
