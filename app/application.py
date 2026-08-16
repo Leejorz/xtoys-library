@@ -483,12 +483,19 @@ class Application:
         return result.returncode == 0, output.strip()
 
     def git_publish(self, commit_message: str = "Update xToys Library") -> dict:
-        """Safely synchronize origin/main, commit local changes, and push.
+        """Safely publish the current working tree to ``origin/main``.
 
-        Untracked files are normally harmless, but Git refuses a rebase when an
-        untracked path would be overwritten by a file that exists on origin/main.
-        Those conflicting untracked files are temporarily moved into .git so the
-        sync can proceed without deleting or overwriting the user's files.
+        The local project is treated as the source of truth. If GitHub has a
+        newer commit, the publisher merges that commit into the local branch
+        using the local branch as the conflict preference (``-X ours``), then
+        commits the current working-tree changes on top of the synchronized
+        history. This avoids the fragile rebase workflow that previously
+        failed on the GUI and funscript files.
+
+        Untracked files that are already tracked by the remote branch are
+        temporarily moved out of the way so Git cannot overwrite them during
+        the merge. They are restored before the final commit. No force-push is
+        ever used.
         """
         from datetime import datetime
         import shutil
@@ -541,114 +548,170 @@ class Application:
                 + " operation. Finish or abort it before publishing."
             )
 
-        # Refresh origin/main without changing the working tree.
+        # Keep text files normalized in the repository. The project has been
+        # edited on Windows, so without attributes Git can interpret CRLF/LF
+        # changes as thousands of unrelated edits and make merges harder.
+        attributes_path = repo / ".gitattributes"
+        attributes_content = (
+            "* text=auto\n"
+            "*.py text eol=lf\n"
+            "*.json text eol=lf\n"
+            "*.funscript text eol=lf\n"
+            "*.bat text eol=crlf\n"
+        )
+        if not attributes_path.exists():
+            attributes_path.write_text(attributes_content, encoding="utf-8", newline="\n")
+
+        # Refresh origin/main before deciding how much synchronization is
+        # needed. This does not modify the working tree.
         run_git("fetch", "origin", "main")
 
         backup_root = (
             git_dir
             / "publish-untracked-backup"
-            / datetime.now().strftime("%Y%m%d_%H%M%S")
+            / datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         )
         protected = []
         warnings = []
+        merge_started = False
 
-        # Protect only untracked files that the remote branch already owns.
-        # New legitimate files that are not on origin are left alone and can be
-        # staged normally by the publisher.
-        untracked = run_git(
-            "ls-files", "--others", "--exclude-standard"
-        ).stdout.splitlines()
+        def protect_remote_owned_untracked():
+            untracked = run_git(
+                "ls-files", "--others", "--exclude-standard"
+            ).stdout.splitlines()
 
-        for rel in untracked:
-            rel = rel.strip()
-            if not rel:
-                continue
+            for rel in untracked:
+                rel = rel.strip()
+                if not rel:
+                    continue
 
-            remote_entry = run_git(
-                "cat-file", "-e", f"origin/main:{rel}", check=False
-            )
-            if remote_entry.returncode != 0:
-                continue
+                remote_entry = run_git(
+                    "cat-file", "-e", f"origin/main:{rel}", check=False
+                )
+                if remote_entry.returncode != 0:
+                    continue
 
-            original = repo / rel
-            if not original.exists():
-                continue
+                original = repo / rel
+                if not original.exists():
+                    continue
 
-            backup = backup_root / rel
-            backup.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(original), str(backup))
-            protected.append((original, backup))
-            warnings.append(
-                "Protected untracked file from remote overwrite: "
-                f"{rel} (backup: {backup.relative_to(repo)})"
-            )
+                backup = backup_root / rel
+                backup.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(original), str(backup))
+                protected.append((original, backup))
+                warnings.append(
+                    "Temporarily protected local file from remote overwrite: "
+                    f"{rel}"
+                )
 
         def restore_protected():
-            # On failure, put protected files back exactly where they were.
             for original, backup in reversed(protected):
                 if not backup.exists():
                     continue
                 if original.exists():
-                    continue
+                    # The merge may have created the remote copy. Replace it
+                    # with the user's current local copy, which is the source
+                    # of truth for this publish operation.
+                    if original.is_file() or original.is_symlink():
+                        original.unlink()
+                    elif original.is_dir():
+                        shutil.rmtree(original)
                 original.parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(backup), str(original))
 
+        def cleanup_backup():
+            if backup_root.exists():
+                shutil.rmtree(backup_root, ignore_errors=True)
+
         try:
-            # Commit current library changes first. This also captures newly
-            # imported funscripts that were added by rebuild_library().
-            run_git("add", ".")
-            staged = run_git("diff", "--cached", "--name-only").stdout.splitlines()
+            protect_remote_owned_untracked()
+
+            # Merge the remote history rather than rebasing local commits.
+            # This is deliberately non-destructive: conflicting hunks prefer
+            # the local branch, while remote-only files are still incorporated.
+            merge = run_git(
+                "merge",
+                "--no-commit",
+                "--no-edit",
+                "-X",
+                "ours",
+                "origin/main",
+                check=False,
+            )
+            merge_started = merge.returncode == 0
+
+            if merge.returncode != 0:
+                run_git("merge", "--abort", check=False)
+                details = (merge.stderr or merge.stdout).strip()
+                raise RuntimeError(
+                    "GitHub has newer commits and the project could not be "
+                    "safely synchronized. No force-push was used.\n\n"
+                    + details
+                )
+
+            # Restore local files that were temporarily moved before the merge.
+            restore_protected()
+
+            # Stage the complete current project state. Renames/deletions are
+            # intentional when they are present in the working tree.
+            run_git("add", "-A")
+            run_git("add", "--renormalize", ".")
+            staged = run_git(
+                "diff", "--cached", "--name-only"
+            ).stdout.splitlines()
 
             if staged:
                 run_git("commit", "-m", commit_message)
-                commit_hash = run_git("rev-parse", "--short", "HEAD").stdout.strip()
+            elif merge_started and (repo / ".git" / "MERGE_HEAD").exists():
+                # There were no additional working-tree changes, but the
+                # remote still needed to be merged into the local history.
+                run_git("commit", "--no-edit")
             else:
-                commit_hash = run_git("rev-parse", "--short", "HEAD").stdout.strip()
-
-            # Rebase local commits onto any newer origin/main commit.
-            behind = int(
-                (run_git("rev-list", "--count", "HEAD..origin/main").stdout or "0").strip() or "0"
-            )
-            if behind:
-                rebase = run_git("rebase", "origin/main", check=False)
-                if rebase.returncode != 0:
-                    run_git("rebase", "--abort", check=False)
-                    details = (rebase.stderr or rebase.stdout).strip()
-                    raise RuntimeError(
-                        "GitHub has newer commits and the local changes could not "
-                        "be rebased automatically. No force-push was used.\n\n"
-                        + details
-                    )
-                commit_hash = run_git("rev-parse", "--short", "HEAD").stdout.strip()
-
-            ahead = int(
-                (run_git("rev-list", "--count", "origin/main..HEAD").stdout or "0").strip() or "0"
-            )
-
-            if ahead == 0:
+                # Nothing changed after synchronization.
+                head = run_git("rev-parse", "--short", "HEAD").stdout.strip()
                 return {
                     "remote": remote,
-                    "changed": bool(staged),
-                    "files": staged,
-                    "commit": commit_hash if staged else "",
+                    "changed": False,
+                    "files": [],
+                    "commit": "",
                     "warnings": warnings,
                     "message": "GitHub is already up to date.",
                 }
 
+            commit_hash = run_git(
+                "rev-parse", "--short", "HEAD"
+            ).stdout.strip()
+
+            # Push the synchronized history. If GitHub moves during this
+            # operation, merge the new remote tip once more and retry.
             push = run_git("push", "-u", "origin", "main", check=False)
+
             if push.returncode != 0:
-                # One safe retry for a remote update that arrived during publish.
                 run_git("fetch", "origin", "main")
-                retry = run_git("rebase", "origin/main", check=False)
-                if retry.returncode != 0:
-                    run_git("rebase", "--abort", check=False)
-                    details = (retry.stderr or retry.stdout).strip()
+                retry_merge = run_git(
+                    "merge",
+                    "--no-commit",
+                    "--no-edit",
+                    "-X",
+                    "ours",
+                    "origin/main",
+                    check=False,
+                )
+                if retry_merge.returncode != 0:
+                    run_git("merge", "--abort", check=False)
+                    details = (retry_merge.stderr or retry_merge.stdout).strip()
                     raise RuntimeError(
-                        "The remote changed while publishing and Git could not "
-                        "rebase the local commit safely. No force-push was used.\n\n"
+                        "GitHub changed while publishing and the new remote "
+                        "commit could not be merged safely. No force-push was used.\n\n"
                         + details
                     )
-                commit_hash = run_git("rev-parse", "--short", "HEAD").stdout.strip()
+
+                run_git("add", "-A")
+                run_git("add", "--renormalize", ".")
+                run_git("commit", "--no-edit")
+                commit_hash = run_git(
+                    "rev-parse", "--short", "HEAD"
+                ).stdout.strip()
                 push = run_git("push", "-u", "origin", "main", check=False)
 
             if push.returncode != 0:
@@ -665,8 +728,12 @@ class Application:
             }
 
         except Exception:
+            if merge_started and (git_dir / "MERGE_HEAD").exists():
+                run_git("merge", "--abort", check=False)
             restore_protected()
             raise
+        finally:
+            cleanup_backup()
 
     def edit_video_source(
         self,
