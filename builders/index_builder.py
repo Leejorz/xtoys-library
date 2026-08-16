@@ -69,6 +69,19 @@ class IndexBuilder:
 
             file.write("\n")
 
+        # The original xToys player expects a separate index-hash.sha
+        # file in addition to the "hash" field inside index.json.
+        hash_path = output_path.parent / "index-hash.sha"
+
+        with open(
+            hash_path,
+            "w",
+            encoding="utf-8"
+        ) as file:
+
+            file.write(index["hash"])
+            file.write("\n")
+
         return output_path, len(videos)
 
     def build_video(self, script):
