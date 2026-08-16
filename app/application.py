@@ -1,6 +1,7 @@
 from pathlib import Path
 import json
 import re
+import subprocess
 from urllib.parse import urlparse
 
 from app.config import AppConfig
@@ -262,10 +263,14 @@ class Application:
                     for video in indexed
                 }
 
-                if len(indexed) != len(expected):
+                # The index builder creates one video object for each script.
+                # Multiple scripts may intentionally point to the same video
+                # source, so compare against scripts-with-source rather than
+                # the number of unique site/video-ID pairs.
+                if len(indexed) != expected_count:
                     index_errors.append(
                         "Index video count does not match database: "
-                        f"index={len(indexed)}, database={len(expected)}"
+                        f"index={len(indexed)}, database={expected_count}"
                     )
 
                 if actual != expected:
@@ -411,6 +416,119 @@ class Application:
         print("\nVALIDATION PASSED.")
         return True
 
+    def git_publish_preview(self) -> dict:
+        """Return the current GitHub publish target and working-tree changes."""
+        if not (self.root / ".git").exists():
+            raise RuntimeError("This project folder is not a Git repository.")
+
+        def run_git(*args):
+            result = subprocess.run(
+                ["git", *args],
+                cwd=self.root,
+                text=True,
+                capture_output=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            if result.returncode != 0:
+                details = (result.stderr or result.stdout).strip()
+                raise RuntimeError(details or f"git {' '.join(args)} failed")
+            return result.stdout.strip()
+
+        branch = run_git("branch", "--show-current")
+        if branch != "main":
+            raise RuntimeError(
+                f"GitHub publishing is configured for the main branch, but the current branch is '{branch or 'detached HEAD'}'."
+            )
+
+        remote = run_git("remote", "get-url", "origin")
+        if not remote:
+            raise RuntimeError("No GitHub origin remote is configured.")
+
+        status = run_git("status", "--short")
+        files = [line for line in status.splitlines() if line.strip()]
+        return {"branch": branch, "remote": remote, "files": files}
+
+    def validate_index_schema(self) -> tuple[bool, str]:
+        """Run the project's index schema diagnostic and return its output."""
+        result = subprocess.run(
+            [
+                __import__("sys").executable,
+                str(self.root / "Check_index_schema.py"),
+            ],
+            cwd=self.root,
+            text=True,
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        output = (result.stdout or "") + (result.stderr or "")
+        return result.returncode == 0, output.strip()
+
+    def git_publish(self, commit_message: str = "Update xToys Library") -> dict:
+        """Validate, stage, commit, and push the current library to origin/main.
+
+        This method is intended for the GUI publisher. It uses the repository's
+        existing Git credentials/credential manager and never handles passwords
+        itself.
+        """
+        repo = self.root
+
+        def run_git(*args, check=True):
+            result = subprocess.run(
+                ["git", *args],
+                cwd=repo,
+                text=True,
+                capture_output=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            if check and result.returncode != 0:
+                details = (result.stderr or result.stdout).strip()
+                raise RuntimeError(details or f"git {' '.join(args)} failed")
+            return result
+
+        if not (repo / ".git").exists():
+            raise RuntimeError("This project folder is not a Git repository.")
+
+        remote = run_git("remote", "get-url", "origin").stdout.strip()
+        if not remote:
+            raise RuntimeError("No GitHub origin remote is configured.")
+
+        branch = run_git("branch", "--show-current").stdout.strip()
+        if branch != "main":
+            raise RuntimeError(
+                f"GitHub publishing is configured for the main branch, but the current branch is '{branch or 'detached HEAD'}'."
+            )
+
+        status_before = run_git("status", "--porcelain").stdout.strip()
+        if not status_before:
+            return {
+                "remote": remote,
+                "changed": False,
+                "commit": "",
+                "message": "Nothing to publish. The working tree is already clean.",
+            }
+
+        run_git("add", ".")
+
+        staged = run_git("diff", "--cached", "--name-only").stdout.splitlines()
+        if not staged:
+            raise RuntimeError("Git found no publishable changes after staging.")
+
+        commit = run_git("commit", "-m", commit_message)
+        commit_hash = run_git("rev-parse", "--short", "HEAD").stdout.strip()
+
+        push = run_git("push", "-u", "origin", "main")
+
+        return {
+            "remote": remote,
+            "changed": True,
+            "files": staged,
+            "commit": commit_hash,
+            "message": (push.stdout or commit.stdout).strip(),
+        }
+
     def edit_video_source(
         self,
         source_id: int,
@@ -428,55 +546,120 @@ class Application:
 
     def import_eroscripts(
         self,
-        url: str
+        url: str,
+        video_source_url: str | None = None,
+        interactive: bool = True,
+        persist: bool = True
     ):
+        """Import EroScripts content.
 
-        auth = EroScriptsAuth(
-            self.root
-        )
+        When persist=False, this method performs only the browser/import work
+        and returns result objects. This is used by the GUI worker thread so
+        that SQLite is never accessed outside the Tkinter/main thread.
+        """
+        auth = EroScriptsAuth(self.root)
 
         try:
-
             auth.start()
 
             if auth.context is None:
-
                 raise RuntimeError(
-                    "Could not start the EroScripts "
-                    "browser session."
+                    "Could not start the EroScripts browser session."
                 )
 
-            importer = EroScriptsImporter(
-                auth.context
-            )
+            importer = EroScriptsImporter(auth.context)
+            destination = self.root / self.config.funscripts_dir
 
-            destination = (
-                self.root
-                / self.config.funscripts_dir
-            )
+            results = importer.import_all_from_url(url, destination)
 
-            results = importer.import_all_from_url(
-                url,
-                destination
-            )
+            # A caller may supply a source URL (CLI compatibility). For the
+            # GUI, source selection is deliberately deferred until after the
+            # automatic detection page has completed.
+            if video_source_url:
+                candidate = self.detect_video_source(video_source_url)
+                if candidate is None:
+                    raise ValueError(
+                        "Could not determine a supported video site and video ID "
+                        f"from this source URL: {video_source_url}"
+                    )
+                for result in results:
+                    self.apply_detected_video_source(result, candidate)
+            elif persist:
+                for result in results:
+                    self.assign_video_source(
+                        result,
+                        preferred_url=None,
+                        interactive=interactive
+                    )
 
-            for result in results:
-                self.assign_video_source(result)
-                self.save_eroscripts_import(
-                    result,
-                    url
-                )
+            if persist:
+                requested_url = self.normalize_url(url)
+                for result in results:
+                    # In normal/CLI mode, assign_video_source above has already
+                    # selected a source or placeholder. Database writes happen
+                    # in the caller's current thread.
+                    self.save_eroscripts_import(result, requested_url)
 
             print(
-                f"\n[IMPORT] Successfully imported {len(results)} "
-                f"funscript(s)."
+                f"\n[IMPORT] Successfully imported {len(results)} funscript(s)."
             )
-
             return results
 
         finally:
-
             auth.close()
+
+    def prepare_video_source(self, result) -> bool:
+        """Attempt automatic source detection without prompting or DB access.
+
+        Returns True when a supported source was found and applied to the
+        in-memory import result. Returns False when GUI fallback is required.
+        """
+        candidates = list(getattr(result, "video_candidates", []) or [])
+
+        for candidate in candidates:
+            url = candidate.get("url") if isinstance(candidate, dict) else None
+            detected = self.detect_video_source(url)
+            if detected:
+                self.apply_detected_video_source(result, detected)
+                return True
+
+        # Some importer results may already contain a video URL even if the
+        # candidate list is empty.
+        existing_url = getattr(result, "video_url", None)
+        detected = self.detect_video_source(existing_url)
+        if detected:
+            self.apply_detected_video_source(result, detected)
+            return True
+
+        result.video_site = None
+        result.video_title = None
+        result.video_url = None
+        result.video_id = None
+        return False
+
+    def apply_detected_video_source(self, result, candidate: dict) -> None:
+        """Apply a known supported source to an in-memory import result."""
+        site = (candidate.get("site") or "").strip().lower()
+        url = self.normalize_url(candidate.get("url") or "")
+        title = candidate.get("title")
+        video_id = candidate.get("video_id") or self.extract_video_id(url)
+
+        if not site or not url or not video_id:
+            raise ValueError("Detected video source is incomplete.")
+
+        if site not in self.config.xtoys_supported_video_sites:
+            raise ValueError(
+                f"Detected site '{site}' is not configured as an xToys-supported site."
+            )
+
+        result.video_site = site
+        result.video_title = title
+        result.video_url = url
+        result.video_id = video_id
+
+    def apply_placeholder_video_source(self, result) -> None:
+        """Apply the project's fixed placeholder source to an import result."""
+        self._apply_placeholder_source(result)
 
     @staticmethod
     def normalize_url(
@@ -507,7 +690,12 @@ class Application:
 
         return url
 
-    def assign_video_source(self, result) -> None:
+    def assign_video_source(
+        self,
+        result,
+        preferred_url: str | None = None,
+        interactive: bool = True
+    ) -> None:
         """Choose the video's xToys source.
 
         A per-script EroScripts video match is preferred. If that source is
@@ -515,6 +703,19 @@ class Application:
         preserving the original URL as source_url so it can still be opened
         separately. If no source can be found, ask for manual input.
         """
+        # A GUI/user-supplied source URL takes precedence over anything
+        # scraped from the EroScripts page.  This also avoids the old
+        # terminal prompts when importing through the GUI.
+        if preferred_url:
+            candidate = self.detect_video_source(preferred_url)
+            if candidate is None:
+                raise ValueError(
+                    "Could not determine a supported video site and video ID "
+                    f"from this source URL: {preferred_url}"
+                )
+            self._apply_detected_video_source(result, candidate)
+            return
+
         candidates = list(getattr(result, "video_candidates", []) or [])
 
         if len(candidates) == 1 and candidates[0].get("url"):
@@ -543,6 +744,13 @@ class Application:
                         return
                 except ValueError:
                     pass
+
+        if not interactive:
+            # GUI imports must never block on an input() prompt.  If the page
+            # did not expose a usable source and the user did not provide one,
+            # keep the existing placeholder behavior.
+            self._apply_placeholder_source(result)
+            return
 
         print(
             f"\n[IMPORT] Could not confidently determine a video source "
@@ -726,6 +934,73 @@ class Application:
             thread_url=requested_url
         )
 
+    @classmethod
+    def detect_video_source(cls, video_url: str | None) -> dict | None:
+        """Detect the xToys-compatible site and ID directly from a video URL."""
+        if not video_url:
+            return None
+
+        video_url = cls.normalize_url(video_url)
+        parsed = urlparse(video_url)
+        host = (parsed.hostname or "").lower().rstrip(".")
+        if host.startswith("www."):
+            host = host[4:]
+
+        supported = {
+            "eporner.com",
+            "rule34video.com",
+            "noodledude.io",
+        }
+
+        # Treat supported-site subdomains such as cdn.noodledude.io as the
+        # same source family. The canonical site stored in the library is
+        # always the configured xToys-compatible root domain.
+        if host == "noodledude.io" or host.endswith(".noodledude.io"):
+            host = "noodledude.io"
+
+        if host not in supported:
+            return None
+
+        path = parsed.path.rstrip("/")
+        video_id = ""
+
+        # Eporner: /video-IslEEgDDtNt/title/
+        if host == "eporner.com":
+            match = re.search(r"/video-([A-Za-z0-9_-]+)(?:/|$)", path, re.I)
+            if match:
+                video_id = match.group(1)
+
+        # Common video URL forms used by the other supported sites.
+        if not video_id:
+            for pattern in (
+                r"/video/([A-Za-z0-9_-]+)(?:/|$)",
+                r"/videos?/([A-Za-z0-9_-]+)(?:/|$)",
+                r"/v/([A-Za-z0-9_-]+)(?:/|$)",
+            ):
+                match = re.search(pattern, path, re.I)
+                if match:
+                    video_id = match.group(1)
+                    break
+
+        # Some supported sites expose the ID in a query parameter.
+        if not video_id:
+            for key in ("video", "video_id", "id"):
+                value = parsed.query
+                match = re.search(r"(?:^|&)" + re.escape(key) + r"=([^&]+)", value, re.I)
+                if match:
+                    video_id = match.group(1)
+                    break
+
+        if not video_id:
+            return None
+
+        return {
+            "site": host,
+            "url": video_url,
+            "title": None,
+            "video_id": video_id,
+        }
+
     @staticmethod
     def extract_video_id(
         video_url: str | None
@@ -735,6 +1010,10 @@ class Application:
             return ""
 
         video_url = video_url.strip()
+
+        detected = Application.detect_video_source(video_url)
+        if detected:
+            return detected["video_id"]
 
         # Handle Markdown links:
         #

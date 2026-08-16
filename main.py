@@ -1,4 +1,10 @@
 from app.application import Application
+from ui.gui import LibraryGUI
+
 
 if __name__ == "__main__":
-    Application().run()
+    application = Application()
+    try:
+        LibraryGUI(application).run()
+    finally:
+        application.database.close()

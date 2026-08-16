@@ -902,7 +902,7 @@ class EroScriptsImporter:
                 except Exception:
                     continue
 
-                if not re.search(r"\\bVideo\\s*:", text, flags=re.IGNORECASE):
+                if not re.search(r"\bVideo\s*:", text, flags=re.IGNORECASE):
                     continue
 
                 links = node.locator("a[href]")
