@@ -18,4 +18,7 @@ storage/*.db-*
 Thumbs.db
 .DS_Store
 storage/*.db.*
-*.backup
+*.backup/xToys Library Manager.exe
+/playwright-browsers/
+/build/
+/dist/

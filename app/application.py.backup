@@ -1,0 +1,769 @@
+from pathlib import Path
+import json
+import re
+from urllib.parse import urlparse
+
+from app.config import AppConfig
+from app.logger import setup_logging
+from storage.database import Database
+from ui.menu import MainMenu
+from core.scanner import LibraryScanner
+from core.eroscripts import EroScriptsImporter
+from core.eroscripts_auth import EroScriptsAuth
+from builders.index_builder import IndexBuilder
+
+
+class Application:
+
+    def __init__(self, root: Path | None = None):
+
+        self.root = (
+            root
+            or Path(__file__).resolve().parent.parent
+        )
+
+        self.config = AppConfig.load(
+            self.root / "config.json"
+        )
+
+        self.config.ensure_directories(
+            self.root
+        )
+
+        self.logger = setup_logging(
+            self.root
+            / self.config.logs_dir
+            / "manager.log"
+        )
+
+        self.database = Database(
+            self.root / self.config.database
+        )
+
+        self.database.initialize()
+
+    def run(self):
+
+        self.logger.info(
+            "Application started"
+        )
+
+        try:
+
+            MainMenu(self).run()
+
+        finally:
+
+            self.database.close()
+
+            self.logger.info(
+                "Application stopped"
+            )
+
+    def rebuild_library(self):
+
+        scanner = LibraryScanner(
+            self.root / self.config.funscripts_dir
+        )
+
+        scanned = scanner.scan()
+
+        new_count = 0
+        rename_count = 0
+        unchanged_count = 0
+
+        for script in scanned:
+
+            existing = self.database.get_script_by_hash(
+                script.content_hash
+            )
+
+            if existing is None:
+
+                self.database.add_script(
+                    script.filename,
+                    script.content_hash
+                )
+
+                new_count += 1
+
+            elif existing["filename"] != script.filename:
+
+                self.database.update_filename(
+                    script.content_hash,
+                    script.filename
+                )
+
+                rename_count += 1
+
+            else:
+
+                unchanged_count += 1
+
+        print(
+            "\nLibrary rebuilt successfully.\n"
+        )
+
+        print(
+            f"Scripts found : {len(scanned)}"
+        )
+
+        print(
+            f"New scripts   : {new_count}"
+        )
+
+        print(
+            f"Renamed       : {rename_count}"
+        )
+
+        print(
+            f"Unchanged     : {unchanged_count}"
+        )
+
+    def build_index(self):
+
+        builder = IndexBuilder(
+            self.root,
+            self.database,
+            self.config
+        )
+
+        output_path, count = builder.build()
+
+        print(
+            "\nIndex generated successfully.\n"
+        )
+
+        print(
+            f"Videos : {count}"
+        )
+
+        print(
+            f"Output : {output_path}"
+        )
+
+    def edit_video_source(
+        self,
+        source_id: int,
+        site: str,
+        video_id: str,
+        source_url: str | None = None
+    ) -> None:
+
+        self.database.edit_video_source(
+            source_id=source_id,
+            site=site,
+            video_id=video_id,
+            source_url=source_url
+        )
+
+    def validate_library(self) -> bool:
+        """
+        Run a read-only consistency check across the funscript files,
+        SQLite database, and generated index.json.
+
+        Returns True when no validation errors are found.
+        """
+
+        errors = []
+
+        funscripts_dir = (
+            self.root / self.config.funscripts_dir
+        )
+
+        # ---------------------------------------------------------
+        # 1. Compare files on disk with database script records.
+        # ---------------------------------------------------------
+
+        disk_files = {
+            path.name
+            for path in funscripts_dir.glob("*.funscript")
+            if path.is_file()
+        }
+
+        scripts = self.database.all_scripts()
+
+        db_filenames = {
+            script["filename"]
+            for script in scripts
+            if script["filename"]
+        }
+
+        missing_files = sorted(
+            db_filenames - disk_files,
+            key=str.lower
+        )
+
+        untracked_files = sorted(
+            disk_files - db_filenames,
+            key=str.lower
+        )
+
+        if missing_files:
+
+            errors.append(
+                "Database scripts missing from disk: "
+                + ", ".join(missing_files)
+            )
+
+        if untracked_files:
+
+            errors.append(
+                "Funscript files missing from database: "
+                + ", ".join(untracked_files)
+            )
+
+        # ---------------------------------------------------------
+        # 2. Check database relationships.
+        # ---------------------------------------------------------
+
+        connection = self.database.connect()
+
+        # ---------------------------------------------------------
+        # Tags
+        # ---------------------------------------------------------
+
+        tag_rows = connection.execute(
+            """
+            SELECT
+                st.script_id,
+                st.tag_id
+            FROM script_tags AS st
+            LEFT JOIN scripts AS s
+                ON s.id = st.script_id
+            LEFT JOIN tags AS t
+                ON t.id = st.tag_id
+            WHERE s.id IS NULL
+               OR t.id IS NULL
+            """
+        ).fetchall()
+
+        if tag_rows:
+
+            errors.append(
+                f"Orphaned script_tags rows: {len(tag_rows)}"
+            )
+
+        # ---------------------------------------------------------
+        # Video sources
+        # ---------------------------------------------------------
+
+        video_rows = connection.execute(
+            """
+            SELECT
+                vs.id,
+                vs.script_id,
+                vs.site,
+                vs.video_id
+            FROM video_sources AS vs
+            LEFT JOIN scripts AS s
+                ON s.id = vs.script_id
+            WHERE s.id IS NULL
+            """
+        ).fetchall()
+
+        if video_rows:
+
+            errors.append(
+                f"Orphaned video_sources rows: {len(video_rows)}"
+            )
+
+        invalid_video_rows = connection.execute(
+            """
+            SELECT
+                id,
+                script_id,
+                site,
+                video_id
+            FROM video_sources
+            WHERE TRIM(COALESCE(site, '')) = ''
+               OR TRIM(COALESCE(video_id, '')) = ''
+            """
+        ).fetchall()
+
+        if invalid_video_rows:
+
+            errors.append(
+                "Video sources with missing site or video ID: "
+                + str(len(invalid_video_rows))
+            )
+
+        # ---------------------------------------------------------
+        # Primary video sources
+        # ---------------------------------------------------------
+
+        primary_counts = connection.execute(
+            """
+            SELECT
+                script_id,
+                COUNT(*)
+            FROM video_sources
+            WHERE is_primary = 1
+            GROUP BY script_id
+            HAVING COUNT(*) > 1
+            """
+        ).fetchall()
+
+        if primary_counts:
+
+            errors.append(
+                "Scripts with multiple primary video sources: "
+                + str(len(primary_counts))
+            )
+
+        # ---------------------------------------------------------
+        # EroScripts threads
+        # ---------------------------------------------------------
+
+        thread_rows = connection.execute(
+            """
+            SELECT
+                et.id,
+                et.script_id,
+                et.thread_url
+            FROM eroscripts_threads AS et
+            LEFT JOIN scripts AS s
+                ON s.id = et.script_id
+            WHERE s.id IS NULL
+            """
+        ).fetchall()
+
+        if thread_rows:
+
+            errors.append(
+                f"Orphaned eroscripts_threads rows: {len(thread_rows)}"
+            )
+
+        empty_thread_rows = connection.execute(
+            """
+            SELECT
+                id,
+                script_id
+            FROM eroscripts_threads
+            WHERE TRIM(COALESCE(thread_url, '')) = ''
+            """
+        ).fetchall()
+
+        if empty_thread_rows:
+
+            errors.append(
+                "EroScripts threads with missing URL: "
+                + str(len(empty_thread_rows))
+            )
+
+        # ---------------------------------------------------------
+        # 3. Validate index.json.
+        # ---------------------------------------------------------
+
+        index_path = (
+            self.root / self.config.index_file
+        )
+
+        if not index_path.exists():
+
+            errors.append(
+                f"Index file does not exist: {index_path}"
+            )
+
+        else:
+
+            try:
+
+                with open(
+                    index_path,
+                    "r",
+                    encoding="utf-8"
+                ) as file:
+
+                    index = json.load(file)
+
+                indexed_videos = index.get(
+                    "videos",
+                    []
+                )
+
+                # Build the expected database video list.
+                db_videos = []
+
+                for script in scripts:
+
+                    source = (
+                        self.database.get_video_source(
+                            script["id"]
+                        )
+                    )
+
+                    if source is not None:
+
+                        db_videos.append(
+                            (
+                                script["id"],
+                                (
+                                    source["site"]
+                                    or ""
+                                ),
+                                (
+                                    source["video_id"]
+                                    or ""
+                                )
+                            )
+                        )
+
+                # -------------------------------------------------
+                # Count comparison.
+                # -------------------------------------------------
+
+                if len(indexed_videos) != len(db_videos):
+
+                    errors.append(
+                        "Index video count does not match database: "
+                        f"index={len(indexed_videos)}, "
+                        f"database={len(db_videos)}"
+                    )
+
+                # -------------------------------------------------
+                # Source comparison.
+                # -------------------------------------------------
+
+                index_videos = {
+                    (
+                        video.get("site", ""),
+                        video.get("id", "")
+                    )
+                    for video in indexed_videos
+                }
+
+                database_videos = {
+                    (
+                        site,
+                        video_id
+                    )
+                    for _, site, video_id in db_videos
+                }
+
+                if index_videos != database_videos:
+
+                    missing_from_index = sorted(
+                        database_videos - index_videos
+                    )
+
+                    stale_in_index = sorted(
+                        index_videos - database_videos
+                    )
+
+                    if missing_from_index:
+
+                        errors.append(
+                            "Database video sources missing from index: "
+                            + str(missing_from_index)
+                        )
+
+                    if stale_in_index:
+
+                        errors.append(
+                            "Stale video sources in index: "
+                            + str(stale_in_index)
+                        )
+
+            except (
+                OSError,
+                ValueError,
+                TypeError
+            ) as error:
+
+                errors.append(
+                    f"Could not read index.json: {error}"
+                )
+
+        # ---------------------------------------------------------
+        # 4. Print validation report.
+        # ---------------------------------------------------------
+
+        print(
+            "\n" + "=" * 41
+        )
+
+        print(
+            "        Library Validation"
+        )
+
+        print(
+            "=" * 41
+        )
+
+        print(
+            f"\nScripts in database : {len(scripts)}"
+        )
+
+        print(
+            f"Funscripts on disk  : {len(disk_files)}"
+        )
+
+        print(
+            f"Missing from disk   : {len(missing_files)}"
+        )
+
+        print(
+            f"Untracked on disk   : {len(untracked_files)}"
+        )
+
+        print(
+            f"\nValidation errors   : {len(errors)}"
+        )
+
+        if errors:
+
+            print(
+                "\nValidation FAILED."
+            )
+
+            for error in errors:
+
+                print(
+                    f"  ERROR: {error}"
+                )
+
+            return False
+
+        print(
+            "\nValidation PASSED."
+        )
+
+        return True
+
+    def import_eroscripts(
+        self,
+        url: str
+    ):
+
+        auth = EroScriptsAuth(
+            self.root
+        )
+
+        try:
+
+            auth.start()
+
+            if auth.context is None:
+
+                raise RuntimeError(
+                    "Could not start the EroScripts "
+                    "browser session."
+                )
+
+            importer = EroScriptsImporter(
+                auth.context
+            )
+
+            destination = (
+                self.root
+                / self.config.funscripts_dir
+            )
+
+            result = importer.import_from_url(
+                url,
+                destination
+            )
+
+            self.save_eroscripts_import(
+                result,
+                url
+            )
+
+            return result
+
+        finally:
+
+            auth.close()
+
+    @staticmethod
+    def normalize_url(
+        url: str | None
+    ) -> str:
+
+        if not url:
+
+            return ""
+
+        url = url.strip()
+
+        # Convert Markdown links:
+        #
+        # [https://example.com](https://example.com)
+        #
+        # into:
+        #
+        # https://example.com
+
+        match = re.fullmatch(
+            r"\[([^\]]+)\]\(([^)]+)\)",
+            url
+        )
+
+        if match:
+
+            url = match.group(2).strip()
+
+        return url
+
+    def save_eroscripts_import(
+        self,
+        result,
+        requested_url: str
+    ) -> None:
+
+        # Always store a clean URL in SQLite.
+
+        requested_url = self.normalize_url(
+            requested_url
+        )
+
+        content_hash = result.content_hash
+
+        existing = (
+            self.database.get_script_by_hash(
+                content_hash
+            )
+        )
+
+        if existing is None:
+
+            script_id = (
+                self.database.add_script_metadata(
+                    filename=result.filename,
+                    content_hash=content_hash,
+                    title=result.title,
+                    display_name=result.title,
+                    creator=result.creator,
+                    eroscripts_url=requested_url
+                )
+            )
+
+        else:
+
+            script_id = existing["id"]
+
+            self.database.update_script_metadata(
+                script_id=script_id,
+                filename=result.filename,
+                title=result.title,
+                display_name=result.title,
+                creator=result.creator,
+                eroscripts_url=requested_url
+            )
+
+        self.database.replace_script_tags(
+            script_id,
+            result.tags
+        )
+
+        if result.video_site:
+
+            video_id = self.extract_video_id(
+                result.video_url
+            )
+
+            if not video_id:
+
+                video_id = (
+                    result.video_url
+                    or ""
+                )
+
+            self.database.upsert_video_source(
+                script_id=script_id,
+                site=result.video_site,
+                video_id=video_id,
+                source_url=result.video_url,
+                duration=result.duration,
+                average_speed=result.average_speed,
+                action_count=result.action_count
+            )
+
+        self.database.upsert_eroscripts_thread(
+            script_id=script_id,
+            thread_url=requested_url
+        )
+
+    @staticmethod
+    def extract_video_id(
+        video_url: str | None
+    ) -> str:
+
+        if not video_url:
+
+            return ""
+
+        video_url = video_url.strip()
+
+        # Handle Markdown links:
+        #
+        # [https://example.com/video/123/title](
+        #     https://example.com/video/123/title
+        # )
+        #
+        # Extract the actual URL from the Markdown wrapper.
+
+        match = re.search(
+            r"\]\((https?://[^)]+)\)",
+            video_url
+        )
+
+        if match:
+
+            video_url = match.group(1).strip()
+
+        # Extract the ID specifically from:
+        #
+        # /video/<ID>/
+        #
+        # This prevents numbers later in the title from
+        # being mistaken for the video ID.
+
+        match = re.search(
+            r"/video/(\d+)(?:/|$)",
+            video_url
+        )
+
+        if match:
+
+            return match.group(1)
+
+        # Fallback for URLs that don't use the expected
+        # /video/<ID>/ format.
+
+        parsed = urlparse(
+            video_url
+        )
+
+        path = parsed.path.rstrip(
+            "/"
+        )
+
+        path_parts = [
+            part
+            for part in path.split("/")
+            if part
+        ]
+
+        for part in reversed(path_parts):
+
+            if part.isdigit():
+
+                return part
+
+        return ""
+
+    def login_eroscripts(self):
+
+        auth = EroScriptsAuth(
+            self.root
+        )
+
+        try:
+
+            auth.login()
+
+        finally:
+
+            auth.close()

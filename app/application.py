@@ -1,5 +1,6 @@
 from pathlib import Path
 import json
+import sys
 import re
 import subprocess
 from urllib.parse import urlparse
@@ -27,10 +28,12 @@ class Application:
 
     def __init__(self, root: Path | None = None):
 
-        self.root = (
-            root
-            or Path(__file__).resolve().parent.parent
-        )
+        if root is not None:
+            self.root = Path(root).resolve()
+        elif getattr(sys, "frozen", False):
+            self.root = Path(sys.executable).resolve().parent
+        else:
+            self.root = Path(__file__).resolve().parent.parent
 
         self.config = AppConfig.load(
             self.root / "config.json"
@@ -467,20 +470,59 @@ class Application:
         }
 
     def validate_index_schema(self) -> tuple[bool, str]:
-        """Run the project's index schema diagnostic and return its output."""
-        result = subprocess.run(
-            [
-                __import__("sys").executable,
-                str(self.root / "Check_index_schema.py"),
-            ],
-            cwd=self.root,
-            text=True,
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-        output = (result.stdout or "") + (result.stderr or "")
-        return result.returncode == 0, output.strip()
+        """Validate index.json directly so frozen builds need no Python subprocess."""
+        generated_path = self.root / self.config.index_file
+        reference_path = self.root / "(example)index.json"
+        lines = [
+            "=" * 60,
+            "        xToys index.json Schema Diagnostic",
+            "=" * 60,
+            "",
+            f"Generated: {generated_path}",
+            f"Reference: {reference_path}",
+        ]
+        if not generated_path.exists():
+            lines.append("\nERROR: index.json does not exist.")
+            return False, "\n".join(lines)
+        if not reference_path.exists():
+            lines.append("\nERROR: (example)index.json does not exist.")
+            return False, "\n".join(lines)
+        try:
+            generated = json.loads(generated_path.read_text(encoding="utf-8"))
+            reference = json.loads(reference_path.read_text(encoding="utf-8"))
+        except Exception as error:
+            lines.append(f"\nERROR: Could not read JSON: {error}")
+            return False, "\n".join(lines)
+
+        errors=[]
+        if set(generated) != set(reference):
+            errors.append(f"Top-level fields mismatch: missing={sorted(set(reference)-set(generated))}, extra={sorted(set(generated)-set(reference))}")
+        else:
+            lines.append("\nTOP-LEVEL STRUCTURE: OK")
+        for field, typ in {"author":str,"videos":list,"version":int,"tags":dict}.items():
+            if not isinstance(generated.get(field), typ):
+                errors.append(f"{field} should be {typ.__name__}")
+        expected_video={"name","site","id","scripts","tags","created_at","url","valid","creator","ignore","last_checked","thumbnail","displayName"}
+        expected_script={"name","location"}
+        videos=generated.get("videos",[])
+        lines.append(f"Generated video objects: {len(videos)}")
+        if not videos: errors.append("No video objects found")
+        for i, video in enumerate(videos,1):
+            if not isinstance(video,dict):
+                errors.append(f"Video #{i} is not an object"); continue
+            if set(video)!=expected_video: errors.append(f"Video #{i} fields mismatch")
+            scripts=video.get("scripts")
+            if not isinstance(scripts,list) or not scripts:
+                errors.append(f"Video #{i} contains no scripts"); continue
+            for j, script in enumerate(scripts,1):
+                if not isinstance(script,dict) or set(script)!=expected_script:
+                    errors.append(f"Video #{i} Script #{j} fields mismatch")
+        if errors:
+            lines.append("\nVALIDATION FAILED.")
+            lines.extend(f"  ERROR: {e}" for e in errors)
+            return False, "\n".join(lines)
+        lines.append("\nSCHEMA CHECK PASSED")
+        return True, "\n".join(lines)
 
     def git_publish(self, commit_message: str = "Update xToys Library") -> dict:
         """Safely publish the current working tree to ``origin/main``.
@@ -773,7 +815,7 @@ class Application:
                     "Could not start the EroScripts browser session."
                 )
 
-            importer = EroScriptsImporter(auth.context)
+            importer = EroScriptsImporter(auth.context, self.root)
             destination = self.root / self.config.funscripts_dir
 
             results = importer.import_all_from_url(url, destination)

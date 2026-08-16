@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 
 from playwright.sync_api import (
     BrowserContext,
@@ -29,6 +30,10 @@ class EroScriptsAuth:
         self.context: BrowserContext | None = None
 
     def start(self):
+
+        browser_dir = self.root / "playwright-browsers"
+        if browser_dir.exists():
+            os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(browser_dir)
 
         self.playwright = sync_playwright().start()
 

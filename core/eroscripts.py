@@ -40,9 +40,11 @@ class EroScriptsImporter:
 
     def __init__(
         self,
-        context: BrowserContext
+        context: BrowserContext,
+        root: Path | None = None
     ):
         self.context = context
+        self.root = Path(root).resolve() if root is not None else Path.cwd().resolve()
 
     def _write_diagnostic_report(self, page, page_url: str, candidates: list[tuple[str, str]], video_candidates: list[dict]) -> Path:
         """Write a safe diagnostic report for importer debugging.
@@ -50,7 +52,7 @@ class EroScriptsImporter:
         The report contains page/link structure and importer decisions, but never
         browser cookies, storage state, headers, or credentials.
         """
-        logs_dir = Path("logs")
+        logs_dir = self.root / "logs"
         logs_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         report_path = logs_dir / f"eroscripts_diagnostic_{stamp}.txt"
