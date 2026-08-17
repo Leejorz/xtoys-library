@@ -17,7 +17,7 @@
       "valid": true,
       "creator": "99DM",
       "ignore": false,
-      "last_checked": "2026-08-17T15:26:47.720871+00:00",
+      "last_checked": "2026-08-17T15:28:56.413669+00:00",
       "thumbnail": "",
       "displayName": "(WICKED R34) Sick Like That - Beatbar PMV - DVa (No.09)"
     },
@@ -37,12 +37,52 @@
       "valid": true,
       "creator": "Midevil",
       "ignore": false,
-      "last_checked": "2026-08-17T15:26:47.721023+00:00",
+      "last_checked": "2026-08-17T15:28:56.413785+00:00",
       "thumbnail": "",
       "displayName": "Dragon Ball HMV Nintendawg 4k Reupload"
+    },
+    {
+      "name": "GEE - MARIE ROSE SPECIAL(DOA)",
+      "site": "rule34video",
+      "id": "3109515",
+      "scripts": [
+        {
+          "name": "GEE - MARIE ROSE SPECIAL(DOA).funscript",
+          "location": "https://raw.githubusercontent.com/leejorz/xtoys-library/main/funscripts/GEE%20-%20MARIE%20ROSE%20SPECIAL%28DOA%29.funscript"
+        }
+      ],
+      "tags": [],
+      "created_at": "2026-08-17 15:28:48",
+      "url": "https://discuss.eroscripts.com/t/gee-marie-rose-special-doa/58563",
+      "valid": true,
+      "creator": "sol_K",
+      "ignore": false,
+      "last_checked": "2026-08-17T15:28:56.413942+00:00",
+      "thumbnail": "",
+      "displayName": "GEE - MARIE ROSE SPECIAL(DOA)"
+    },
+    {
+      "name": "GEE - MARIE ROSE SPECIAL(DOA) (Music)",
+      "site": "rule34video",
+      "id": "3109515",
+      "scripts": [
+        {
+          "name": "GEE - MARIE ROSE SPECIAL(DOA) (Music).funscript",
+          "location": "https://raw.githubusercontent.com/leejorz/xtoys-library/main/funscripts/GEE%20-%20MARIE%20ROSE%20SPECIAL%28DOA%29%20%28Music%29.funscript"
+        }
+      ],
+      "tags": [],
+      "created_at": "2026-08-17 15:28:48",
+      "url": "https://discuss.eroscripts.com/t/gee-marie-rose-special-doa/58563",
+      "valid": true,
+      "creator": "sol_K",
+      "ignore": false,
+      "last_checked": "2026-08-17T15:28:56.413865+00:00",
+      "thumbnail": "",
+      "displayName": "GEE - MARIE ROSE SPECIAL(DOA) (Music)"
     }
   ],
   "version": 1,
   "tags": {},
-  "hash": "64d750782c6f17bdccb9a5aa135c5616915acd5a6115d575b6ff357da7d72443"
+  "hash": "0ea0c9ed2a97c08880f097371d9aaa20bd7b2bfe2731b721b6f47e9060372608"
 }
