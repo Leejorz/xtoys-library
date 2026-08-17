@@ -1295,6 +1295,16 @@ class Application:
             if match:
                 video_id = match.group(1)
 
+        # SpankBang: /<video-id>/video/<title>
+        if host == "spankbang.com":
+            match = re.search(
+                r"/([A-Za-z0-9_-]+)/video(?:/|$)",
+                path,
+                re.I,
+            )
+            if match:
+                video_id = match.group(1)
+
         # Common video URL forms used by the other supported sites.
         if not video_id:
             for pattern in (

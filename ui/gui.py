@@ -1002,7 +1002,6 @@ class LibraryGUI:
             site_entry = ttk.Entry(
                 detected,
                 textvariable=site_var,
-                state="readonly",
                 width=28,
             )
             site_entry.grid(row=0, column=1, sticky="ew", padx=(0, 18))
@@ -1015,7 +1014,6 @@ class LibraryGUI:
             id_entry = ttk.Entry(
                 detected,
                 textvariable=id_var,
-                state="readonly",
                 width=18,
             )
             id_entry.grid(row=0, column=3, sticky="ew")
@@ -1057,9 +1055,74 @@ class LibraryGUI:
             tag_controls = ttk.Frame(tags_frame)
             tag_controls.pack(side="right", fill="y", padx=(8, 0))
 
+            # Common tags that can be selected instead of typed repeatedly.
+            # Keep manual tag entry below for anything not in this list.
+            preset_frame = ttk.LabelFrame(tag_controls, text="Preset Tags", padding=6)
+            preset_frame.pack(fill="both", expand=True, pady=(0, 8))
+
+            preset_list = tk.Listbox(
+                preset_frame,
+                height=8,
+                width=18,
+                selectmode="browse",
+            )
+            preset_list.pack(side="left", fill="both", expand=True)
+
+            preset_scroll = ttk.Scrollbar(
+                preset_frame,
+                orient="vertical",
+                command=preset_list.yview,
+            )
+            preset_scroll.pack(side="right", fill="y")
+            preset_list.configure(yscrollcommand=preset_scroll.set)
+
+            preset_tags = [
+                "HMV",
+                "PMV",
+                "Asian",
+                "White",
+                "TikTok",
+                "VR",
+                "POV",
+                "Blowjob",
+                "Anal",
+                "Vaginal",
+                "Handjob",
+                "Cumshot",
+            ]
+            for preset in preset_tags:
+                preset_list.insert("end", preset)
+
+            def add_selected_preset():
+                selected = preset_list.curselection()
+                if not selected:
+                    return
+                value = preset_list.get(selected[0])
+                current = list(
+                    self.application.database.get_tags_for_script(script_id)
+                )
+                if value not in current:
+                    current.append(value)
+                    self.application.database.replace_script_tags(
+                        script_id, current
+                    )
+                    self.application.build_index()
+                    refresh_tags()
+
+            ttk.Button(
+                preset_frame,
+                text="Add Selected Preset",
+                command=add_selected_preset,
+            ).pack(fill="x", pady=(6, 0))
+
+            preset_list.bind("<Double-1>", lambda _event: add_selected_preset())
+
+            manual_frame = ttk.LabelFrame(tag_controls, text="Manual Tag", padding=6)
+            manual_frame.pack(fill="x")
+
             tag_var = tk.StringVar()
             ttk.Entry(
-                tag_controls,
+                manual_frame,
                 textvariable=tag_var,
                 width=24,
             ).pack(fill="x", pady=(0, 6))
@@ -1103,13 +1166,13 @@ class LibraryGUI:
                 refresh_tags()
 
             ttk.Button(
-                tag_controls,
-                text="Add Tag",
+                manual_frame,
+                text="Add Manual Tag",
                 command=add_tag,
             ).pack(fill="x", pady=(0, 6))
             ttk.Button(
-                tag_controls,
-                text="Remove Selected",
+                manual_frame,
+                text="Remove Selected Tag",
                 command=remove_tag,
             ).pack(fill="x")
 

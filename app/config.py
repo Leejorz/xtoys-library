@@ -20,6 +20,7 @@ class AppConfig:
 
     eroscripts_enabled: bool
     xtoys_supported_video_sites: tuple[str, ...]
+    tag_presets: tuple[str, ...]
 
     @classmethod
     def load(cls, path: Path):
@@ -134,6 +135,15 @@ class AppConfig:
                     ["eporner.com", "rule34video.com", "noodledude.io", "spankbang.com", "pmvhaven.com"]
                 )
                 if str(site).strip()
+            ),
+
+            tuple(
+                str(tag).strip()
+                for tag in video_sites.get(
+                    "tag_presets",
+                    ["HMV", "PMV", "Asian", "White", "TikTok"]
+                )
+                if str(tag).strip()
             )
         )
 
