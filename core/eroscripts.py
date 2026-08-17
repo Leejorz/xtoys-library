@@ -794,24 +794,25 @@ class EroScriptsImporter:
             if not title_match:
                 return []
 
-            # EroScripts/Discourse renders the topic tags *after* the topic
-            # title in the main topic header. The previous implementation only
-            # searched before the title, which caused the site's navigation tags
-            # to be missed and resulted in every imported script having no tags.
-            # Search a focused window around the title, with extra weight on the
-            # HTML immediately following it.
+            # Look backward from the title for the topic
+            # header area. Discourse normally renders the
+            # topic tags near the topic title.
+            #
+            # 25,000 characters is deliberately generous
+            # because EroScripts has a large header.
 
             start = max(
                 0,
-                title_match.start() - 3000
+                title_match.start() - 25000
             )
-
             end = min(
                 len(html),
-                title_match.end() + 15000
+                title_match.end() + 25000
             )
 
-            header_html = html[start:end]
+            header_html = html[
+                start:end
+            ]
 
             # Find tag links in this header region.
             #

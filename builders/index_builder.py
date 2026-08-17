@@ -30,15 +30,11 @@ class IndexBuilder:
             if video is not None:
                 videos.append(video)
 
-        # Publish newest library additions first. created_at is assigned when
-        # a script is first added to this library and is intentionally kept
-        # unchanged by later edits/rebuilds.
+        # Newest library additions first.  created_at is the library-added
+        # timestamp used by the current project.
         videos.sort(
-            key=lambda video: (
-                video.get("created_at") or "",
-                video.get("displayName") or ""
-            ),
-            reverse=True
+            key=lambda video: str(video.get("created_at") or ""),
+            reverse=True,
         )
 
         tags = self.build_tags(videos)

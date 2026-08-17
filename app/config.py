@@ -50,66 +50,92 @@ class AppConfig:
             {}
         )
 
-        def path_value(key, default):
-            value = lib.get(key, default)
-            if isinstance(value, bool) or not isinstance(value, (str, Path)):
-                return Path(default)
-            return Path(value)
-
         return cls(
 
-            path_value("funscripts_dir", "funscripts"),
-            path_value("images_dir", "images"),
-            path_value("metadata_dir", "metadata"),
-            path_value("cache_dir", "cache"),
-            path_value("logs_dir", "logs"),
-            path_value("database", "storage/library.db"),
-            path_value("index_file", "index.json"),
-            bool(github.get("enabled", False)),
-            bool(github.get("auto_push", False)),
-            str(github.get("raw_base_url", "") or ""),
-            bool(eroscripts.get("enabled", False)),
-            tuple(dict.fromkeys(
-                [
-                    str(site).strip().lower()
-                    for site in video_sites.get(
-                        "xtoys_supported_sites",
-                        ["eporner.com", "rule34video.com", "noodledude.io"]
-                    )
-                    if str(site).strip()
-                ] + ["spankbang.com"]
-            ))
-        )
+            Path(
+                lib.get(
+                    "funscripts_dir",
+                    "funscripts"
+                )
+            ),
 
-    def save(self, path: Path) -> None:
-        """Persist editable settings while preserving unrelated config keys."""
-        data = {}
-        if path.exists():
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-            except Exception:
-                data = {}
-        data.setdefault("library", {})
-        data.setdefault("github", {})
-        data.setdefault("eroscripts", {})
-        data.setdefault("video_sources", {})
-        data["library"].update({
-            "funscripts_dir": str(self.funscripts_dir),
-            "images_dir": str(self.images_dir),
-            "metadata_dir": str(self.metadata_dir),
-            "cache_dir": str(self.cache_dir),
-            "logs_dir": str(self.logs_dir),
-            "database": str(self.database),
-            "index_file": str(self.index_file),
-        })
-        data["github"].update({
-            "enabled": bool(self.github_enabled),
-            "auto_push": bool(self.github_auto_push),
-            "raw_base_url": str(self.raw_base_url),
-        })
-        data["eroscripts"]["enabled"] = bool(self.eroscripts_enabled)
-        data["video_sources"]["xtoys_supported_sites"] = list(self.xtoys_supported_video_sites)
-        path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\\n", encoding="utf-8")
+            Path(
+                lib.get(
+                    "images_dir",
+                    "images"
+                )
+            ),
+
+            Path(
+                lib.get(
+                    "metadata_dir",
+                    "metadata"
+                )
+            ),
+
+            Path(
+                lib.get(
+                    "cache_dir",
+                    "cache"
+                )
+            ),
+
+            Path(
+                lib.get(
+                    "logs_dir",
+                    "logs"
+                )
+            ),
+
+            Path(
+                lib.get(
+                    "database",
+                    "storage/library.db"
+                )
+            ),
+
+            Path(
+                lib.get(
+                    "index_file",
+                    "index.json"
+                )
+            ),
+
+            bool(
+                github.get(
+                    "enabled",
+                    False
+                )
+            ),
+
+            bool(
+                github.get(
+                    "auto_push",
+                    False
+                )
+            ),
+
+            github.get(
+                "raw_base_url",
+                ""
+            ),
+
+            bool(
+                eroscripts.get(
+                    "enabled",
+                    False
+                )
+            ),
+
+            tuple(
+                str(site).strip().lower()
+                for site in video_sites.get(
+                    "xtoys_supported_sites",
+                    ["eporner.com", "rule34video.com", "noodledude.io", "spankbang.com", "pmvhaven.com"]
+                )
+                if str(site).strip()
+            )
+        )
 
     def ensure_directories(
         self,

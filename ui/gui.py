@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import shutil
-from dataclasses import replace
 import threading
 import tkinter as tk
 from pathlib import Path
@@ -234,8 +233,52 @@ class LibraryGUI:
             wraplength=640,
         ).pack(anchor="w", pady=(0, 14))
 
-        fallback_frame = ttk.Frame(page3)
-        fallback_frame.pack(fill="both", expand=True)
+        # Scrollable fallback-source area. Long imports can contain many
+        # funscripts that need manual video sources, so keep the controls
+        # inside a fixed-height scrolling region.
+        fallback_container = ttk.Frame(page3)
+        fallback_container.pack(fill="both", expand=True)
+        fallback_canvas = tk.Canvas(
+            fallback_container,
+            highlightthickness=0,
+            borderwidth=0,
+        )
+        fallback_scrollbar = ttk.Scrollbar(
+            fallback_container,
+            orient="vertical",
+            command=fallback_canvas.yview,
+        )
+        fallback_frame = ttk.Frame(fallback_canvas)
+        fallback_window = fallback_canvas.create_window(
+            (0, 0),
+            window=fallback_frame,
+            anchor="nw",
+        )
+
+        def _fallback_configure(_event=None):
+            fallback_canvas.configure(
+                scrollregion=fallback_canvas.bbox("all")
+            )
+
+        def _fallback_width(event):
+            fallback_canvas.itemconfigure(
+                fallback_window,
+                width=event.width,
+            )
+
+        fallback_frame.bind("<Configure>", _fallback_configure)
+        fallback_canvas.bind("<Configure>", _fallback_width)
+        fallback_canvas.configure(
+            yscrollcommand=fallback_scrollbar.set
+        )
+        fallback_canvas.pack(side="left", fill="both", expand=True)
+        fallback_scrollbar.pack(side="right", fill="y")
+        fallback_canvas.bind_all(
+            "<MouseWheel>",
+            lambda event: fallback_canvas.yview_scroll(
+                int(-event.delta / 120), "units"
+            ),
+        )
 
         page3_status = tk.StringVar(value="")
         ttk.Label(page3, textvariable=page3_status, wraplength=640).pack(anchor="w", pady=(10, 10))
@@ -747,9 +790,8 @@ class LibraryGUI:
         columns = ("title", "creator", "site", "video_id")
         tree = ttk.Treeview(outer, columns=columns, show="headings", selectmode="browse")
 
-        # Default library order is newest added to oldest added. The existing
-        # created_at timestamp represents when the script entered this library.
-        # Existing column sorting remains available by clicking a heading.
+        # Default library order is newest library-added timestamp first.
+        # created_at is the current project's library-added timestamp.
         sort_column = {"value": "created_at"}
         sort_reverse = {"value": True}
 
@@ -985,7 +1027,93 @@ class LibraryGUI:
                 frame,
                 textvariable=status_var,
                 wraplength=570,
-            ).pack(anchor="w", pady=(0, 10))
+            ).pack(anchor="w", pady=(0, 8))
+
+            # Tag editor. Tags are stored in script_tags and are emitted by
+            # IndexBuilder into both the video's tags array and the top-level
+            # index tag map.
+            tags_frame = ttk.LabelFrame(
+                frame,
+                text="Tags",
+                padding=8,
+            )
+            tags_frame.pack(fill="both", expand=True, pady=(0, 10))
+
+            tags_list = tk.Listbox(
+                tags_frame,
+                height=5,
+                selectmode="browse",
+            )
+            tags_list.pack(side="left", fill="both", expand=True)
+
+            tags_scroll = ttk.Scrollbar(
+                tags_frame,
+                orient="vertical",
+                command=tags_list.yview,
+            )
+            tags_scroll.pack(side="left", fill="y")
+            tags_list.configure(yscrollcommand=tags_scroll.set)
+
+            tag_controls = ttk.Frame(tags_frame)
+            tag_controls.pack(side="right", fill="y", padx=(8, 0))
+
+            tag_var = tk.StringVar()
+            ttk.Entry(
+                tag_controls,
+                textvariable=tag_var,
+                width=24,
+            ).pack(fill="x", pady=(0, 6))
+
+            def refresh_tags():
+                tags_list.delete(0, "end")
+                for tag in self.application.database.get_tags_for_script(
+                    script_id
+                ):
+                    tags_list.insert("end", tag)
+
+            def add_tag():
+                value = tag_var.get().strip()
+                if not value:
+                    return
+                current = list(
+                    self.application.database.get_tags_for_script(script_id)
+                )
+                if value not in current:
+                    current.append(value)
+                    self.application.database.replace_script_tags(
+                        script_id, current
+                    )
+                    self.application.build_index()
+                    refresh_tags()
+                    tag_var.set("")
+
+            def remove_tag():
+                selected = tags_list.curselection()
+                if not selected:
+                    return
+                remove = tags_list.get(selected[0])
+                current = [
+                    tag for tag in self.application.database.get_tags_for_script(script_id)
+                    if tag != remove
+                ]
+                self.application.database.replace_script_tags(
+                    script_id, current
+                )
+                self.application.build_index()
+                refresh_tags()
+
+            ttk.Button(
+                tag_controls,
+                text="Add Tag",
+                command=add_tag,
+            ).pack(fill="x", pady=(0, 6))
+            ttk.Button(
+                tag_controls,
+                text="Remove Selected",
+                command=remove_tag,
+            ).pack(fill="x")
+
+            refresh_tags()
 
             buttons = ttk.Frame(frame)
             buttons.pack(fill="x", side="bottom")
@@ -1136,116 +1264,77 @@ class LibraryGUI:
             command=edit_selected_source,
         ).pack(side="left")
 
+        def delete_selected_funscript():
+            selection = tree.selection()
+            if not selection:
+                messagebox.showinfo(
+                    "Select Funscript",
+                    "Select a funscript first.",
+                    parent=window,
+                )
+                return
+
+            script_id = int(selection[0])
+            script = next(
+                (item for item in scripts if item["id"] == script_id),
+                None,
+            )
+            if script is None:
+                return
+
+            title = Path(script["filename"]).stem
+            if not messagebox.askyesno(
+                "Delete Funscript",
+                f"Delete this funscript from the library?\n\n{title}",
+                parent=window,
+            ):
+                return
+
+            try:
+                path = (
+                    self.application.root
+                    / self.application.config.funscripts_dir
+                    / script["filename"]
+                )
+                self.application.database.delete_script_and_associated_records(
+                    script_id
+                )
+                if path.exists():
+                    path.unlink()
+                self.application.build_index()
+                load_scripts()
+                self.refresh_count()
+                self.set_status(f"Deleted {title}.")
+            except Exception as error:
+                messagebox.showerror(
+                    "Delete Funscript Failed",
+                    str(error),
+                    parent=window,
+                )
+
+        ttk.Button(
+            bottom,
+            text="Delete Funscript",
+            command=delete_selected_funscript,
+        ).pack(side="left")
+
         ttk.Button(
             bottom,
             text="Close",
             command=window.destroy,
         ).pack(side="right")
 
+        load_scripts()
+
     def show_settings(self):
         config = self.application.config
-        window = tk.Toplevel(self.root)
-        window.title("Settings")
-        window.geometry("760x620")
-        window.minsize(680, 520)
-        window.transient(self.root)
-        window.grab_set()
-
-        outer = ttk.Frame(window, padding=16)
-        outer.pack(fill="both", expand=True)
-
-        notebook = ttk.Notebook(outer)
-        notebook.pack(fill="both", expand=True)
-
-        library_frame = ttk.Frame(notebook, padding=12)
-        github_frame = ttk.Frame(notebook, padding=12)
-        video_frame = ttk.Frame(notebook, padding=12)
-        notebook.add(library_frame, text="Library")
-        notebook.add(github_frame, text="GitHub")
-        notebook.add(video_frame, text="Video Sources")
-
-        def add_field(parent, row, label, value):
-            ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", padx=(0, 10), pady=6)
-            var = tk.StringVar(value=str(value))
-            entry = ttk.Entry(parent, textvariable=var)
-            entry.grid(row=row, column=1, sticky="ew", pady=6)
-            return var
-
-        for frame in (library_frame, github_frame, video_frame):
-            frame.columnconfigure(1, weight=1)
-
-        fields = {}
-        fields["funscripts_dir"] = add_field(library_frame, 0, "Funscripts folder", config.funscripts_dir)
-        fields["images_dir"] = add_field(library_frame, 1, "Images folder", config.images_dir)
-        fields["metadata_dir"] = add_field(library_frame, 2, "Metadata folder", config.metadata_dir)
-        fields["cache_dir"] = add_field(library_frame, 3, "Cache folder", config.cache_dir)
-        fields["logs_dir"] = add_field(library_frame, 4, "Logs folder", config.logs_dir)
-        fields["database"] = add_field(library_frame, 5, "Database", config.database)
-        fields["index_file"] = add_field(library_frame, 6, "Index file", config.index_file)
-
-        github_enabled = tk.BooleanVar(value=config.github_enabled)
-        github_auto = tk.BooleanVar(value=config.github_auto_push)
-        ttk.Checkbutton(github_frame, text="Enable GitHub publishing", variable=github_enabled).grid(row=0, column=0, columnspan=2, sticky="w", pady=6)
-        ttk.Checkbutton(github_frame, text="Auto-push after publishing", variable=github_auto).grid(row=1, column=0, columnspan=2, sticky="w", pady=6)
-        fields["raw_base_url"] = add_field(github_frame, 2, "Raw funscript base URL", config.raw_base_url)
-
-        fields["sites"] = add_field(
-            video_frame, 0, "xToys-supported sites (comma separated)",
-            ", ".join(config.xtoys_supported_video_sites)
+        messagebox.showinfo(
+            "Settings",
+            f"Database: {config.database}\n"
+            f"Funscripts: {config.funscripts_dir}\n"
+            f"Images: {config.images_dir}\n"
+            f"Metadata: {config.metadata_dir}\n"
+            f"Index: {config.index_file}\n"
+            f"GitHub raw base: {getattr(config, 'raw_base_url', '')}",
+            parent=self.root,
         )
-        ttk.Label(
-            video_frame,
-            text="The site names are normalized to domains internally. SpankBang is supported as spankbang.com.",
-            wraplength=600,
-        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(12, 0))
-
-        ttk.Label(
-            outer,
-            text="Changes to directory locations take effect after restarting the application.",
-            wraplength=700,
-        ).pack(anchor="w", pady=(10, 6))
-
-        buttons = ttk.Frame(outer)
-        buttons.pack(fill="x")
-
-        def save():
-            try:
-                values = {}
-                for key in ("funscripts_dir", "images_dir", "metadata_dir", "cache_dir", "logs_dir", "database", "index_file"):
-                    value = fields[key].get().strip()
-                    if not value:
-                        raise ValueError(f"{key} cannot be empty.")
-                    values[key] = Path(value)
-                sites = tuple(
-                    s.strip().lower()
-                    for s in fields["sites"].get().split(",")
-                    if s.strip()
-                )
-                if not sites:
-                    raise ValueError("At least one supported video site is required.")
-
-                new_config = replace(
-                    config,
-                    funscripts_dir=values["funscripts_dir"],
-                    images_dir=values["images_dir"],
-                    metadata_dir=values["metadata_dir"],
-                    cache_dir=values["cache_dir"],
-                    logs_dir=values["logs_dir"],
-                    database=values["database"],
-                    index_file=values["index_file"],
-                    github_enabled=github_enabled.get(),
-                    github_auto_push=github_auto.get(),
-                    raw_base_url=fields["raw_base_url"].get().strip(),
-                    xtoys_supported_video_sites=sites,
-                )
-                new_config.save(self.application.root / "config.json")
-                self.application.config = new_config
-                new_config.ensure_directories(self.application.root)
-                self.set_status("Settings saved", "Settings saved successfully.")
-                window.destroy()
-            except Exception as exc:
-                messagebox.showerror("Settings", str(exc), parent=window)
-
-        ttk.Button(buttons, text="Save", command=save).pack(side="right")
-        ttk.Button(buttons, text="Cancel", command=window.destroy).pack(side="right", padx=(0, 8))
-

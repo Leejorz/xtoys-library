@@ -1263,6 +1263,7 @@ class Application:
             "rule34video.com",
             "noodledude.io",
             "spankbang.com",
+            "pmvhaven.com",
         }
 
         # Treat supported-site subdomains such as cdn.noodledude.io as the
@@ -1283,9 +1284,14 @@ class Application:
             if match:
                 video_id = match.group(1)
 
-        # SpankBang: /<ID>/video/<title>
-        if host == "spankbang.com":
-            match = re.search(r"/([A-Za-z0-9_-]+)/video(?:/|$)", path, re.I)
+        # PMVHaven: /video/<title>_<hex-id>
+        # The identifier is the final underscore-delimited component.
+        if host == "pmvhaven.com":
+            match = re.search(
+                r"/video/.+_([A-Za-z0-9]+)(?:/|$)",
+                path,
+                re.I,
+            )
             if match:
                 video_id = match.group(1)
 
