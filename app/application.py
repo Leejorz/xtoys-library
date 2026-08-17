@@ -1262,6 +1262,7 @@ class Application:
             "eporner.com",
             "rule34video.com",
             "noodledude.io",
+            "spankbang.com",
         }
 
         # Treat supported-site subdomains such as cdn.noodledude.io as the
@@ -1279,6 +1280,12 @@ class Application:
         # Eporner: /video-IslEEgDDtNt/title/
         if host == "eporner.com":
             match = re.search(r"/video-([A-Za-z0-9_-]+)(?:/|$)", path, re.I)
+            if match:
+                video_id = match.group(1)
+
+        # SpankBang: /<ID>/video/<title>
+        if host == "spankbang.com":
+            match = re.search(r"/([A-Za-z0-9_-]+)/video(?:/|$)", path, re.I)
             if match:
                 video_id = match.group(1)
 
