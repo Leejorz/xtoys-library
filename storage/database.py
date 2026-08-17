@@ -118,39 +118,40 @@ class Database:
 
         connection = self.connect()
 
-        columns = {
+        video_columns = {
             row["name"]
             for row in connection.execute(
                 "PRAGMA table_info(video_sources)"
             ).fetchall()
         }
 
-        migrations = {
+        script_columns = {
+            row["name"]
+            for row in connection.execute(
+                "PRAGMA table_info(scripts)"
+            ).fetchall()
+        }
 
+        video_migrations = {
             "duration":
                 "ALTER TABLE video_sources "
                 "ADD COLUMN duration TEXT",
-
             "average_speed":
                 "ALTER TABLE video_sources "
                 "ADD COLUMN average_speed REAL",
-
             "action_count":
                 "ALTER TABLE video_sources "
                 "ADD COLUMN action_count INTEGER",
-
-            "added_at":
-                "ALTER TABLE scripts "
-                "ADD COLUMN added_at TEXT"
         }
 
-        for column, statement in migrations.items():
+        for column, statement in video_migrations.items():
+            if column not in video_columns:
+                connection.execute(statement)
 
-            if column not in columns:
-
-                connection.execute(
-                    statement
-                )
+        if "added_at" not in script_columns:
+            connection.execute(
+                "ALTER TABLE scripts ADD COLUMN added_at TEXT"
+            )
 
         # Existing libraries predate the dedicated library-added timestamp.
         # Their original created_at is the closest faithful representation of

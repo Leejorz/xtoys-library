@@ -107,13 +107,11 @@ class IndexBuilder:
 
         site = ""
         video_id = ""
-        source_url = ""
 
         if video_source:
 
-            site = (
+            site = self.normalize_site(
                 video_source["site"]
-                or ""
             )
 
             video_id = (
@@ -121,9 +119,12 @@ class IndexBuilder:
                 or ""
             )
 
-            source_url = self.normalize_url(
-                video_source["source_url"]
-            )
+        # IMPORTANT: xToys uses the EroScripts page as the video object's
+        # `url`. The actual video-host URL is stored separately in the
+        # database and is used only to derive site + video_id.
+        eroscripts_url = self.normalize_url(
+            script["eroscripts_url"]
+        )
 
         return {
             "name": display_name,
@@ -149,7 +150,7 @@ class IndexBuilder:
                 or now
             ),
 
-            "url": source_url,
+            "url": eroscripts_url,
 
             "valid": True,
 
@@ -169,6 +170,34 @@ class IndexBuilder:
 
             "displayName": display_name
         }
+
+    @staticmethod
+    def normalize_site(site: str | None) -> str:
+
+        if not site:
+            return ""
+
+        value = site.strip().lower()
+
+        # Keep the identifiers expected by the original xToys index.
+        aliases = {
+            "spankbang.com": "spankbang",
+            "www.spankbang.com": "spankbang",
+            "pornhub.com": "pornhub",
+            "www.pornhub.com": "pornhub",
+            "xvideos.com": "xvideos",
+            "www.xvideos.com": "xvideos",
+            "xhamster.com": "xhamster",
+            "www.xhamster.com": "xhamster",
+            "eporner.com": "eporner",
+            "www.eporner.com": "eporner",
+            "rule34video.com": "rule34video",
+            "www.rule34video.com": "rule34video",
+            "noodledude.io": "noodledude",
+            "www.noodledude.io": "noodledude",
+        }
+
+        return aliases.get(value, value.removeprefix("www.").split(".")[0])
 
     @staticmethod
     def normalize_url(
