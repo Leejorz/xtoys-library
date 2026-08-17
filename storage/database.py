@@ -218,7 +218,6 @@ class Database:
                 ?,
                 ?,
                 datetime('now'),
-                datetime('now'),
                 datetime('now')
             )
             """,
@@ -260,7 +259,6 @@ class Database:
                 ?,
                 ?,
                 ?,
-                datetime('now'),
                 datetime('now'),
                 datetime('now')
             )

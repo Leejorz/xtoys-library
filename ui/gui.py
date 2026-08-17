@@ -746,10 +746,9 @@ class LibraryGUI:
         columns = ("title", "creator", "site", "video_id")
         tree = ttk.Treeview(outer, columns=columns, show="headings", selectmode="browse")
 
-        # Default library order is newest added to oldest added.  The
-        # created_at represents when the script was added to this library.
-        # It is metadata, not a visible column. Existing column sorting remains
-        # available by clicking a heading.
+        # Default library order is newest added to oldest added.
+        # created_at is set when the script is first added to the library.
+        # Existing column sorting remains available by clicking a heading.
         sort_column = {"value": "created_at"}
         sort_reverse = {"value": True}
 
