@@ -107,7 +107,11 @@ class IndexBuilder:
 
         site = ""
         video_id = ""
-        source_url = ""
+        # The public/library URL is the EroScripts page.
+        # The video source URL is separate metadata used only to derive site/id.
+        source_url = self.normalize_url(
+            script["eroscripts_url"] or ""
+        )
 
         if video_source:
 
@@ -119,13 +123,6 @@ class IndexBuilder:
             video_id = (
                 video_source["video_id"]
                 or ""
-            )
-
-            # "source_url" is the EroScripts/source page URL stored for
-            # this script. Keep it as the library's public URL; do not
-            # replace it with the detected video-host URL.
-            source_url = self.normalize_url(
-                video_source["source_url"]
             )
 
         return {
@@ -200,6 +197,8 @@ class IndexBuilder:
             "www.rule34video.com": "rule34video",
             "redgifs.com": "redgifs",
             "www.redgifs.com": "redgifs",
+            "spankbang.com": "spankbang",
+            "www.spankbang.com": "spankbang",
         }
 
         return known_sites.get(site, site)
@@ -248,11 +247,11 @@ class IndexBuilder:
         filename: str
     ):
 
-        base_url = getattr(
-            self.config,
-            "raw_base_url",
-            ""
-        )
+        destination = getattr(self.config, "publish_destination", "github")
+        if destination == "github":
+            base_url = getattr(self.config, "github_raw_base_url", "") or getattr(self.config, "raw_base_url", "")
+        else:
+            base_url = getattr(self.config, "file_server_public_base_url", "")
 
         if not base_url:
             return filename
