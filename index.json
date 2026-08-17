@@ -17,12 +17,32 @@
       "valid": true,
       "creator": "99DM",
       "ignore": false,
-      "last_checked": "2026-08-17T15:17:10.569500+00:00",
+      "last_checked": "2026-08-17T15:17:58.577745+00:00",
       "thumbnail": "",
       "displayName": "(WICKED R34) Sick Like That - Beatbar PMV - DVa (No.09)"
+    },
+    {
+      "name": "Dragon Ball HMV Nintendawg 4k Reupload",
+      "site": "rule34video",
+      "id": "4409721",
+      "scripts": [
+        {
+          "name": "Dragon Ball HMV Nintendawg 4k Reupload.funscript",
+          "location": "https://raw.githubusercontent.com/leejorz/xtoys-library/main/funscripts/Dragon%20Ball%20HMV%20Nintendawg%204k%20Reupload.funscript"
+        }
+      ],
+      "tags": [],
+      "created_at": "2026-08-17 15:17:53",
+      "url": "https://discuss.eroscripts.com/t/dragon-ball-hmv-nintendawg/324708",
+      "valid": true,
+      "creator": "Midevil",
+      "ignore": false,
+      "last_checked": "2026-08-17T15:17:58.577896+00:00",
+      "thumbnail": "",
+      "displayName": "Dragon Ball HMV Nintendawg 4k Reupload"
     }
   ],
   "version": 1,
   "tags": {},
-  "hash": "a4785a0ebdcf30ce98b2fa1e6fb7c131d42f7b2fde640b19587917127fbff648"
+  "hash": "88ad4cf08842d0eeb7cf1cb421c17f5191454023fce4719c87bc32e9f38c62f7"
 }
