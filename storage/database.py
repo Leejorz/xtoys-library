@@ -124,13 +124,6 @@ class Database:
             ).fetchall()
         }
 
-        script_columns = {
-            row["name"]
-            for row in connection.execute(
-                "PRAGMA table_info(scripts)"
-            ).fetchall()
-        }
-
         video_migrations = {
             "duration":
                 "ALTER TABLE video_sources "
