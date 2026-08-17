@@ -747,9 +747,10 @@ class LibraryGUI:
         tree = ttk.Treeview(outer, columns=columns, show="headings", selectmode="browse")
 
         # Default library order is newest added to oldest added.  The
-        # added_at timestamp is metadata, not a visible column. Existing
-        # column sorting remains available by clicking a heading.
-        sort_column = {"value": "added_at"}
+        # created_at represents when the script was added to this library.
+        # It is metadata, not a visible column. Existing column sorting remains
+        # available by clicking a heading.
+        sort_column = {"value": "created_at"}
         sort_reverse = {"value": True}
 
         def update_headings():
@@ -813,10 +814,10 @@ class LibraryGUI:
                 if query and query not in haystack:
                     continue
 
-                added_at = script["added_at"] or script["created_at"] or ""
-                rows.append((script["id"], title, creator, site, video_id, added_at))
+                created_at = script["created_at"] or ""
+                rows.append((script["id"], title, creator, site, video_id, created_at))
 
-            if sort_column["value"] == "added_at":
+            if sort_column["value"] == "created_at":
                 rows.sort(
                     key=lambda row: str(row[5]),
                     reverse=sort_reverse["value"],
@@ -833,7 +834,7 @@ class LibraryGUI:
                     reverse=sort_reverse["value"],
                 )
 
-            for script_id, title, creator, site, video_id, _added_at in rows:
+            for script_id, title, creator, site, video_id, _created_at in rows:
                 tree.insert(
                     "",
                     "end",
