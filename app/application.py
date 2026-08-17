@@ -3,9 +3,7 @@ import json
 import sys
 import re
 import subprocess
-import base64
-from urllib.parse import urlparse, urljoin, quote as url_quote
-from urllib.request import Request, urlopen
+from urllib.parse import urlparse
 
 from app.config import AppConfig
 from app.logger import setup_logging
@@ -56,96 +54,6 @@ class Application:
         )
 
         self.database.initialize()
-
-    def save_publishing_settings(self, settings: dict) -> None:
-        """Persist publishing destination settings and update Git origin when appropriate."""
-        path = self.root / "config.json"
-        data = json.loads(path.read_text(encoding="utf-8"))
-        publishing = data.setdefault("publishing", {})
-        for key in (
-            "destination", "github_remote_url", "github_raw_base_url",
-            "file_server_upload_url", "file_server_public_base_url",
-            "file_server_username", "file_server_password",
-        ):
-            if key in settings:
-                publishing[key] = settings[key]
-        # Keep legacy GitHub config synchronized for older code/builds.
-        if settings.get("github_raw_base_url") is not None:
-            data.setdefault("github", {})["raw_base_url"] = settings.get("github_raw_base_url", "")
-        path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-
-        remote = str(settings.get("github_remote_url", "") or "").strip()
-        if remote and str(settings.get("destination", "github")).lower() == "github":
-            git_dir = self.root / ".git"
-            if git_dir.exists():
-                result = subprocess.run(
-                    ["git", "remote", "get-url", "origin"],
-                    cwd=self.root, text=True, capture_output=True, encoding="utf-8", errors="replace"
-                )
-                if result.returncode == 0:
-                    subprocess.run(
-                        ["git", "remote", "set-url", "origin", remote],
-                        cwd=self.root, check=True, capture_output=True, text=True
-                    )
-                else:
-                    subprocess.run(
-                        ["git", "remote", "add", "origin", remote],
-                        cwd=self.root, check=True, capture_output=True, text=True
-                    )
-
-        self.config = AppConfig.load(path)
-        self.config.ensure_directories(self.root)
-
-    def get_publishing_summary(self) -> str:
-        destination = getattr(self.config, "publish_destination", "github")
-        if destination == "github":
-            return f"GitHub\nRemote: {getattr(self.config, 'github_remote_url', '')}\nPublic base: {getattr(self.config, 'github_raw_base_url', '')}"
-        return f"File Server (HTTP PUT)\nUpload: {getattr(self.config, 'file_server_upload_url', '')}\nPublic base: {getattr(self.config, 'file_server_public_base_url', '')}"
-
-    def publish_file_server(self, progress_callback=None) -> dict:
-        """Upload index/hash/funscripts to a configured HTTP PUT file server."""
-        upload_base = str(getattr(self.config, "file_server_upload_url", "") or "").strip()
-        public_base = str(getattr(self.config, "file_server_public_base_url", "") or "").strip()
-        if not upload_base:
-            raise RuntimeError("File-server upload URL is not configured.")
-        if not public_base:
-            raise RuntimeError("File-server public base URL is not configured.")
-
-        username = str(getattr(self.config, "file_server_username", "") or "")
-        password = str(getattr(self.config, "file_server_password", "") or "")
-        auth = None
-        if username:
-            token = base64.b64encode(f"{username}:{password}".encode()).decode()
-            auth = "Basic " + token
-
-        files = [self.root / self.config.index_file, self.root / "index-hash.sha"]
-        funscripts_dir = self.root / self.config.funscripts_dir
-        files.extend(sorted(f for f in funscripts_dir.rglob("*.funscript") if f.is_file()))
-        uploaded = []
-        for local in files:
-            if not local.exists():
-                continue
-            rel = local.relative_to(self.root).as_posix()
-            target = upload_base.rstrip("/") + "/" + url_quote(rel, safe="/")
-            data = local.read_bytes()
-            headers = {"Content-Type": "application/json" if local.name.endswith(".json") else "application/octet-stream"}
-            if auth:
-                headers["Authorization"] = auth
-            request = Request(target, data=data, headers=headers, method="PUT")
-            with urlopen(request, timeout=60) as response:
-                if response.status < 200 or response.status >= 300:
-                    raise RuntimeError(f"File-server upload failed for {rel}: HTTP {response.status}")
-            uploaded.append(rel)
-            if progress_callback:
-                progress_callback(f"Uploaded {rel}")
-
-        return {"changed": True, "files": uploaded, "remote": upload_base, "commit": "", "message": f"Uploaded {len(uploaded)} file(s) to file server."}
-
-    def publish_library(self, commit_message: str = "Update xToys Library") -> dict:
-        destination = getattr(self.config, "publish_destination", "github")
-        if destination == "file_server":
-            return self.publish_file_server()
-        return self.git_publish(commit_message)
 
     def run(self):
 
@@ -211,9 +119,26 @@ class Application:
 
                 unchanged_count += 1
 
+        # Reconcile database records against files that actually exist on disk.
+        # Rebuild Library is the authoritative cleanup operation: deleting a
+        # .funscript from disk removes its database record and associated
+        # metadata, while never deleting files itself.
+        disk_names = {item.filename for item in scanned}
+        stale_scripts = [
+            script
+            for script in self.database.all_scripts()
+            if script["filename"] and script["filename"] not in disk_names
+        ]
+        stale_scripts.sort(key=lambda row: (row["filename"] or "").lower())
+
+        removed_count = 0
+        for stale in stale_scripts:
+            self.database.delete_script_and_associated_records(stale["id"])
+            removed_count += 1
+
         progress(
             f"Database update complete: {new_count} new, {rename_count} renamed, "
-            f"{unchanged_count} unchanged."
+            f"{unchanged_count} unchanged, {removed_count} removed."
         )
 
         print(
@@ -236,11 +161,16 @@ class Application:
             f"Unchanged     : {unchanged_count}"
         )
 
+        print(
+            f"Removed       : {removed_count}"
+        )
+
         return {
             "scripts_found": len(scanned),
             "new": new_count,
             "renamed": rename_count,
             "unchanged": unchanged_count,
+            "removed": removed_count,
         }
 
     def build_index(self, progress_callback=None):
@@ -1332,10 +1262,6 @@ class Application:
             "eporner.com",
             "rule34video.com",
             "noodledude.io",
-            "spankbang.com",
-            "pornhub.com",
-            "xvideos.com",
-            "xhamster.com",
         }
 
         # Treat supported-site subdomains such as cdn.noodledude.io as the

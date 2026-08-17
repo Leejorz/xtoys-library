@@ -17,7 +17,8 @@ CREATE TABLE IF NOT EXISTS scripts (
     thumbnail TEXT,
     notes TEXT,
     created_at TEXT,
-    updated_at TEXT
+    updated_at TEXT,
+    added_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS tags (
@@ -136,7 +137,11 @@ class Database:
 
             "action_count":
                 "ALTER TABLE video_sources "
-                "ADD COLUMN action_count INTEGER"
+                "ADD COLUMN action_count INTEGER",
+
+            "added_at":
+                "ALTER TABLE scripts "
+                "ADD COLUMN added_at TEXT"
         }
 
         for column, statement in migrations.items():
@@ -146,6 +151,15 @@ class Database:
                 connection.execute(
                     statement
                 )
+
+        # Existing libraries predate the dedicated library-added timestamp.
+        # Their original created_at is the closest faithful representation of
+        # when the script entered the library, so use it only as a one-time
+        # migration value.
+        connection.execute(
+            "UPDATE scripts SET added_at=created_at "
+            "WHERE added_at IS NULL OR TRIM(added_at)=''"
+        )
 
     def close(self):
 
@@ -211,11 +225,13 @@ class Database:
                 filename,
                 content_hash,
                 created_at,
-                updated_at
+                updated_at,
+                added_at
             )
             VALUES (
                 ?,
                 ?,
+                datetime('now'),
                 datetime('now'),
                 datetime('now')
             )
@@ -249,7 +265,8 @@ class Database:
                 creator,
                 eroscripts_url,
                 created_at,
-                updated_at
+                updated_at,
+                added_at
             )
             VALUES (
                 ?,
@@ -258,6 +275,7 @@ class Database:
                 ?,
                 ?,
                 ?,
+                datetime('now'),
                 datetime('now'),
                 datetime('now')
             )

@@ -18,14 +18,6 @@ class AppConfig:
     github_auto_push: bool
     raw_base_url: str
 
-    publish_destination: str
-    github_remote_url: str
-    github_raw_base_url: str
-    file_server_upload_url: str
-    file_server_public_base_url: str
-    file_server_username: str
-    file_server_password: str
-
     eroscripts_enabled: bool
     xtoys_supported_video_sites: tuple[str, ...]
 
@@ -45,11 +37,6 @@ class AppConfig:
 
         github = data.get(
             "github",
-            {}
-        )
-
-        publishing = data.get(
-            "publishing",
             {}
         )
 
@@ -132,41 +119,6 @@ class AppConfig:
                 "raw_base_url",
                 ""
             ),
-
-            str(publishing.get(
-                "destination",
-                "github"
-            )).strip().lower(),
-
-            str(publishing.get(
-                "github_remote_url",
-                ""
-            ) or ""),
-
-            str(publishing.get(
-                "github_raw_base_url",
-                github.get("raw_base_url", "")
-            ) or ""),
-
-            str(publishing.get(
-                "file_server_upload_url",
-                ""
-            ) or ""),
-
-            str(publishing.get(
-                "file_server_public_base_url",
-                ""
-            ) or ""),
-
-            str(publishing.get(
-                "file_server_username",
-                ""
-            ) or ""),
-
-            str(publishing.get(
-                "file_server_password",
-                ""
-            ) or ""),
 
             bool(
                 eroscripts.get(

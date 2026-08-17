@@ -46,7 +46,7 @@ class LibraryGUI:
         self._button(actions, "Rebuild Library", self.rebuild_library, 1, 0)
         self._button(actions, "Build index.json", self.build_index, 1, 1)
         self._button(actions, "Validate Library", self.validate_library, 2, 0)
-        self._button(actions, "Publish Library", self.publish_to_github, 2, 1)
+        self._button(actions, "Publish to GitHub", self.publish_to_github, 2, 1)
         self._button(actions, "Settings", self.show_settings, 3, 0)
 
         actions.columnconfigure(0, weight=1)
@@ -560,14 +560,9 @@ class LibraryGUI:
 
     def publish_to_github(self):
         """Open the GitHub publisher and safely report any GUI callback error."""
-        destination = getattr(self.application.config, "publish_destination", "github")
-        label = "GitHub" if destination == "github" else "File Server"
-        self.set_status(f"Opening {label} publisher...")
+        self.set_status("Opening GitHub publisher...")
         try:
-            if destination == "file_server":
-                self._open_file_server_publish_dialog()
-            else:
-                self._open_github_publish_dialog()
+            self._open_github_publish_dialog()
         except Exception as error:
             self.set_status("GitHub publisher failed to open")
             messagebox.showerror("GitHub Publisher", str(error), parent=self.root)
@@ -731,47 +726,6 @@ class LibraryGUI:
         # visible for progress, confirmation, and retry after an error.
         dialog.after(100, start_publish)
 
-    def _open_file_server_publish_dialog(self):
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Publish to File Server")
-        dialog.geometry("620x430")
-        dialog.transient(self.root)
-        dialog.grab_set()
-        frame = ttk.Frame(dialog, padding=16); frame.pack(fill="both", expand=True)
-        ttk.Label(frame, text="Publish Library to File Server", font=("TkDefaultFont", 15, "bold")).pack(anchor="w", pady=(0,8))
-        ttk.Label(frame, text="The configured HTTP PUT file server will receive index.json, index-hash.sha, and all funscripts.", wraplength=570).pack(anchor="w", pady=(0,12))
-        log_frame=ttk.LabelFrame(frame,text="Publish progress",padding=8); log_frame.pack(fill="both",expand=True,pady=(0,12))
-        log=tk.Text(log_frame,height=14,wrap="word",state="disabled"); log.pack(fill="both",expand=True)
-        buttons=ttk.Frame(frame); buttons.pack(fill="x")
-        publish=ttk.Button(buttons,text="Publish"); publish.pack(side="left")
-        ttk.Button(buttons,text="Close",command=dialog.destroy).pack(side="right")
-        def add(msg):
-            log.config(state="normal"); log.insert("end",msg+"\n"); log.see("end"); log.config(state="disabled"); self.root.update_idletasks()
-        def worker():
-            try:
-                add("Rebuilding library..."); self.application.rebuild_library()
-                add("Building index.json..."); self.application.build_index()
-                valid, output=self.application.validate_index_schema()
-                add(output[-1800:])
-                if not valid: raise RuntimeError("index.json schema validation failed.")
-                add("Uploading files...")
-                result=self.application.publish_file_server(progress_callback=lambda m:self.root.after(0,lambda m=m:add(m)))
-                self.root.after(0,lambda:self._publish_dialog_success(dialog,result,"File Server"))
-            except Exception as error:
-                self.root.after(0,lambda error=error:self._publish_dialog_error(dialog,error,"File Server"))
-        def start():
-            publish.config(state="disabled"); self.set_status("Publishing library to file server..."); threading.Thread(target=worker,daemon=True).start()
-        publish.config(command=start); dialog.after(100,start)
-
-    def _publish_dialog_success(self, dialog, result, label):
-        self.set_status(f"Published library to {label} successfully.")
-        messagebox.showinfo("Publish Complete", result.get("message", "Publish completed successfully."), parent=dialog)
-        dialog.destroy()
-
-    def _publish_dialog_error(self, dialog, error, label):
-        self.set_status(f"{label} publish failed")
-        messagebox.showerror("Publish Failed", str(error), parent=dialog)
-
     def view_funscripts(self):
         window = tk.Toplevel(self.root)
         window.title("Funscript Library")
@@ -792,9 +746,11 @@ class LibraryGUI:
         columns = ("title", "creator", "site", "video_id")
         tree = ttk.Treeview(outer, columns=columns, show="headings", selectmode="browse")
 
-        # Column sorting state.  Funscript is the default sort.
-        sort_column = {"value": "title"}
-        sort_reverse = {"value": False}
+        # Default library order is newest added to oldest added.  The
+        # added_at timestamp is metadata, not a visible column. Existing
+        # column sorting remains available by clicking a heading.
+        sort_column = {"value": "added_at"}
+        sort_reverse = {"value": True}
 
         def update_headings():
             labels = {
@@ -857,21 +813,27 @@ class LibraryGUI:
                 if query and query not in haystack:
                     continue
 
-                rows.append((script["id"], title, creator, site, video_id))
+                added_at = script["added_at"] or script["created_at"] or ""
+                rows.append((script["id"], title, creator, site, video_id, added_at))
 
-            index = {
-                "title": 1,
-                "creator": 2,
-                "site": 3,
-                "video_id": 4,
-            }[sort_column["value"]]
+            if sort_column["value"] == "added_at":
+                rows.sort(
+                    key=lambda row: str(row[5]),
+                    reverse=sort_reverse["value"],
+                )
+            else:
+                index = {
+                    "title": 1,
+                    "creator": 2,
+                    "site": 3,
+                    "video_id": 4,
+                }[sort_column["value"]]
+                rows.sort(
+                    key=lambda row: str(row[index]).lower(),
+                    reverse=sort_reverse["value"],
+                )
 
-            rows.sort(
-                key=lambda row: str(row[index]).lower(),
-                reverse=sort_reverse["value"],
-            )
-
-            for script_id, title, creator, site, video_id in rows:
+            for script_id, title, creator, site, video_id, _added_at in rows:
                 tree.insert(
                     "",
                     "end",
@@ -1183,37 +1145,13 @@ class LibraryGUI:
 
     def show_settings(self):
         config = self.application.config
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Settings")
-        dialog.geometry("700x560")
-        dialog.minsize(650,520)
-        dialog.transient(self.root); dialog.grab_set()
-        frame=ttk.Frame(dialog,padding=16); frame.pack(fill="both",expand=True)
-        ttk.Label(frame,text="Publishing Settings",font=("TkDefaultFont",15,"bold")).pack(anchor="w",pady=(0,10))
-        dest=tk.StringVar(value=getattr(config,"publish_destination","github"))
-        ttk.Label(frame,text="Publish destination:").pack(anchor="w")
-        combo=ttk.Combobox(frame,textvariable=dest,state="readonly",values=("github","file_server")); combo.pack(fill="x",pady=(4,12))
-        area=ttk.Frame(frame); area.pack(fill="both",expand=True)
-        github=ttk.LabelFrame(area,text="GitHub",padding=10)
-        remote=tk.StringVar(value=getattr(config,"github_remote_url","") or "")
-        raw=tk.StringVar(value=getattr(config,"github_raw_base_url","") or getattr(config,"raw_base_url","") or "")
-        ttk.Label(github,text="Repository URL (origin):").pack(anchor="w"); ttk.Entry(github,textvariable=remote).pack(fill="x",pady=(3,8))
-        ttk.Label(github,text="Public raw base URL for funscripts:").pack(anchor="w"); ttk.Entry(github,textvariable=raw).pack(fill="x",pady=(3,8))
-        ttk.Label(github,text="Example: https://raw.githubusercontent.com/user/repo/main/funscripts/",wraplength=600).pack(anchor="w")
-        server=ttk.LabelFrame(area,text="File Server (HTTP PUT)",padding=10)
-        upload=tk.StringVar(value=getattr(config,"file_server_upload_url","") or ""); public=tk.StringVar(value=getattr(config,"file_server_public_base_url","") or ""); user=tk.StringVar(value=getattr(config,"file_server_username","") or ""); pw=tk.StringVar(value=getattr(config,"file_server_password","") or "")
-        for label,var,show in (("Upload URL:",upload,None),("Public base URL:",public,None),("Username (optional):",user,None),("Password (optional):",pw,"*")):
-            ttk.Label(server,text=label).pack(anchor="w"); ttk.Entry(server,textvariable=var,show=show).pack(fill="x",pady=(3,8))
-        def refresh():
-            for w in (github,server): w.pack_forget()
-            (github if dest.get()=="github" else server).pack(fill="x",expand=True)
-        combo.bind("<<ComboboxSelected>>",lambda e:refresh()); refresh()
-        buttons=ttk.Frame(frame); buttons.pack(fill="x",pady=(12,0))
-        def save():
-            try:
-                self.application.save_publishing_settings({"destination":dest.get(),"github_remote_url":remote.get().strip(),"github_raw_base_url":raw.get().strip(),"file_server_upload_url":upload.get().strip(),"file_server_public_base_url":public.get().strip(),"file_server_username":user.get().strip(),"file_server_password":pw.get()})
-                self.set_status("Publishing settings saved.", f"Publish destination: {dest.get()}")
-                dialog.destroy()
-            except Exception as error:
-                messagebox.showerror("Settings",str(error),parent=dialog)
-        ttk.Button(buttons,text="Save",command=save).pack(side="left"); ttk.Button(buttons,text="Cancel",command=dialog.destroy).pack(side="right")
+        messagebox.showinfo(
+            "Settings",
+            f"Database: {config.database}\n"
+            f"Funscripts: {config.funscripts_dir}\n"
+            f"Images: {config.images_dir}\n"
+            f"Metadata: {config.metadata_dir}\n"
+            f"Index: {config.index_file}\n"
+            f"GitHub raw base: {getattr(config, 'raw_base_url', '')}",
+            parent=self.root,
+        )

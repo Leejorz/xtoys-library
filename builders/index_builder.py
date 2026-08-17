@@ -2,7 +2,7 @@ import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import quote, urlparse
+from urllib.parse import quote
 
 
 class IndexBuilder:
@@ -107,15 +107,11 @@ class IndexBuilder:
 
         site = ""
         video_id = ""
-        # The public/library URL is the EroScripts page.
-        # The video source URL is separate metadata used only to derive site/id.
-        source_url = self.normalize_url(
-            script["eroscripts_url"] or ""
-        )
+        source_url = ""
 
         if video_source:
 
-            site = self.normalize_site(
+            site = (
                 video_source["site"]
                 or ""
             )
@@ -123,6 +119,10 @@ class IndexBuilder:
             video_id = (
                 video_source["video_id"]
                 or ""
+            )
+
+            source_url = self.normalize_url(
+                video_source["source_url"]
             )
 
         return {
@@ -171,40 +171,6 @@ class IndexBuilder:
         }
 
     @staticmethod
-    def normalize_site(
-        site: str | None
-    ) -> str:
-
-        if not site:
-            return ""
-
-        site = site.strip().lower()
-
-        # The xToys index uses site identifiers such as "spankbang"
-        # rather than full hostnames such as "spankbang.com".
-        known_sites = {
-            "spankbang.com": "spankbang",
-            "www.spankbang.com": "spankbang",
-            "pornhub.com": "pornhub",
-            "www.pornhub.com": "pornhub",
-            "xvideos.com": "xvideos",
-            "www.xvideos.com": "xvideos",
-            "xhamster.com": "xhamster",
-            "www.xhamster.com": "xhamster",
-            "eporner.com": "eporner",
-            "www.eporner.com": "eporner",
-            "rule34video.com": "rule34video",
-            "www.rule34video.com": "rule34video",
-            "redgifs.com": "redgifs",
-            "www.redgifs.com": "redgifs",
-            "spankbang.com": "spankbang",
-            "www.spankbang.com": "spankbang",
-        }
-
-        return known_sites.get(site, site)
-
-
-    @staticmethod
     def normalize_url(
         url: str | None
     ) -> str:
@@ -247,11 +213,11 @@ class IndexBuilder:
         filename: str
     ):
 
-        destination = getattr(self.config, "publish_destination", "github")
-        if destination == "github":
-            base_url = getattr(self.config, "github_raw_base_url", "") or getattr(self.config, "raw_base_url", "")
-        else:
-            base_url = getattr(self.config, "file_server_public_base_url", "")
+        base_url = getattr(
+            self.config,
+            "raw_base_url",
+            ""
+        )
 
         if not base_url:
             return filename
