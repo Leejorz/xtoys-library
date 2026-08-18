@@ -138,6 +138,7 @@ class LibraryGUI:
         results_holder = {"value": []}
         missing_holder = {"value": []}
         eroscripts_url_holder = {"value": ""}
+        selected_import_tags_holder = {"value": []}
         fallback_vars = {}
 
         def show_page(name):
@@ -223,7 +224,65 @@ class LibraryGUI:
         ttk.Button(page2_buttons, text="Cancel", command=window.destroy).pack(side="right")
 
         # ------------------------------------------------------------
-        # Page 3: fallback source selection
+        # Page 3: automatic tag selector
+        # ------------------------------------------------------------
+        page_tags = add_page("tags")
+        ttk.Label(page_tags, text="Tags", font=("TkDefaultFont", 16, "bold")).pack(anchor="w", pady=(0, 8))
+        ttk.Label(
+            page_tags,
+            text=(
+                "EroScripts tags are detected automatically. Select the tags "
+                "you want to keep for this import. Preset tags can also be added."
+            ),
+            wraplength=640,
+        ).pack(anchor="w", pady=(0, 12))
+
+        tag_page_container = ttk.Frame(page_tags)
+        tag_page_container.pack(fill="both", expand=True)
+
+        detected_tags_frame = ttk.LabelFrame(
+            tag_page_container, text="Detected EroScripts Tags", padding=8
+        )
+        detected_tags_frame.pack(side="left", fill="both", expand=True, padx=(0, 8))
+
+        detected_tags_list = tk.Listbox(
+            detected_tags_frame, height=14, selectmode="extended", exportselection=False
+        )
+        detected_tags_list.pack(side="left", fill="both", expand=True)
+        detected_tags_scroll = ttk.Scrollbar(
+            detected_tags_frame, orient="vertical", command=detected_tags_list.yview
+        )
+        detected_tags_scroll.pack(side="right", fill="y")
+        detected_tags_list.configure(yscrollcommand=detected_tags_scroll.set)
+
+        preset_tags_frame = ttk.LabelFrame(
+            tag_page_container, text="Preset Tags", padding=8
+        )
+        preset_tags_frame.pack(side="right", fill="both", expand=True)
+
+        preset_tags_list = tk.Listbox(
+            preset_tags_frame, height=14, selectmode="extended", exportselection=False
+        )
+        preset_tags_list.pack(side="left", fill="both", expand=True)
+        preset_tags_scroll = ttk.Scrollbar(
+            preset_tags_frame, orient="vertical", command=preset_tags_list.yview
+        )
+        preset_tags_scroll.pack(side="right", fill="y")
+        preset_tags_list.configure(yscrollcommand=preset_tags_scroll.set)
+
+        tag_page_status = tk.StringVar(value="")
+        ttk.Label(page_tags, textvariable=tag_page_status, wraplength=640).pack(
+            anchor="w", pady=(10, 8)
+        )
+
+        tag_page_buttons = ttk.Frame(page_tags)
+        tag_page_buttons.pack(fill="x", side="bottom")
+        tag_continue_button = ttk.Button(tag_page_buttons, text="Continue")
+        tag_continue_button.pack(side="left")
+        ttk.Button(tag_page_buttons, text="Cancel", command=window.destroy).pack(side="right")
+
+        # ------------------------------------------------------------
+        # Page 4: fallback source selection
         # ------------------------------------------------------------
         page3 = add_page("fallback")
         ttk.Label(page3, text="Video Source", font=("TkDefaultFont", 16, "bold")).pack(anchor="w", pady=(0, 8))
@@ -312,6 +371,59 @@ class LibraryGUI:
         save_button.pack(side="left")
         ttk.Button(page4_buttons, text="Cancel", command=window.destroy).pack(side="right")
 
+        def populate_tag_page(results):
+            detected_tags_list.delete(0, "end")
+            preset_tags_list.delete(0, "end")
+
+            detected = []
+            for result in results:
+                for tag in getattr(result, "tags", []) or []:
+                    clean = str(tag).strip()
+                    if clean and clean.casefold() not in {item.casefold() for item in detected}:
+                        detected.append(clean)
+
+            for tag in detected:
+                detected_tags_list.insert("end", tag)
+            if detected:
+                detected_tags_list.selection_set(0, "end")
+
+            presets = list(getattr(self.application.config, "tag_presets", ()) or ())
+            # Keep any detected tags visible in the preset list only once.
+            for tag in presets:
+                clean = str(tag).strip()
+                if clean:
+                    preset_tags_list.insert("end", clean)
+
+            tag_page_status.set(
+                f"Detected {len(detected)} tag(s). Detected tags are selected by default."
+            )
+            show_page("tags")
+
+        def apply_selected_import_tags():
+            selected = [detected_tags_list.get(i) for i in detected_tags_list.curselection()]
+            selected.extend(preset_tags_list.get(i) for i in preset_tags_list.curselection())
+
+            cleaned = []
+            seen = set()
+            for tag in selected:
+                clean = str(tag).strip()
+                key = clean.casefold()
+                if clean and key not in seen:
+                    seen.add(key)
+                    cleaned.append(clean)
+
+            selected_import_tags_holder["value"] = cleaned
+            for result in results_holder["value"]:
+                result.tags = list(cleaned)
+
+            missing = missing_holder["value"]
+            if missing:
+                show_fallback_page(missing)
+            else:
+                show_save_page()
+
+        tag_continue_button.config(command=apply_selected_import_tags)
+
         def populate_detection_page(results):
             for item in detection_tree.get_children():
                 detection_tree.delete(item)
@@ -331,14 +443,14 @@ class LibraryGUI:
             if missing:
                 detection_status.set("Automatic detection finished. Some video sources need your input.")
                 page2_status.set(f"{len(missing)} funscript(s) need a video source.")
-                detect_next_button.config(state="normal", command=lambda: show_fallback_page(missing))
             else:
                 detection_status.set("Automatic detection succeeded for all imported funscripts.")
-                page2_status.set("All video sources detected automatically. Opening Save...")
-                detect_next_button.config(state="disabled")
-                # Give the user a moment to see the detected site/ID before
-                # moving to the final Save page.
-                self.root.after(650, show_save_page)
+                page2_status.set("All video sources detected automatically.")
+
+            detect_next_button.config(
+                state="normal",
+                command=lambda: populate_tag_page(results),
+            )
 
         def show_fallback_page(missing):
             for child in fallback_frame.winfo_children():
@@ -423,7 +535,9 @@ class LibraryGUI:
                     f"Creator: {result.creator or '—'}\n"
                     f"Site: {result.video_site or '—'}\n"
                     f"Video ID: {result.video_id or '—'}\n"
-                    f"Source URL: {result.video_url or '—'}\n\n",
+                    f"Source URL: {result.video_url or '—'}\n"
+                    f"Tags: {', '.join(result.tags) if result.tags else '—'}\n"
+                    f"Thumbnail: {getattr(result, 'thumbnail', None) or '—'}\n\n",
                 )
             save_text.config(state="disabled")
             save_status.set(f"Ready to save {len(results_holder['value'])} funscript(s).")

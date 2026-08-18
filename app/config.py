@@ -17,6 +17,10 @@ class AppConfig:
     github_enabled: bool
     github_auto_push: bool
     raw_base_url: str
+    github_owner: str
+    github_repo: str
+    github_branch: str
+    github_remote_url: str
 
     eroscripts_enabled: bool
     xtoys_supported_video_sites: tuple[str, ...]
@@ -121,6 +125,11 @@ class AppConfig:
                 ""
             ),
 
+            str(github.get("owner", "leejorz")).strip(),
+            str(github.get("repo", "xtoys-library")).strip(),
+            str(github.get("branch", "main")).strip() or "main",
+            str(github.get("remote_url", "")).strip(),
+
             bool(
                 eroscripts.get(
                     "enabled",
@@ -146,6 +155,35 @@ class AppConfig:
                 if str(tag).strip()
             )
         )
+
+    def save(self, path: Path) -> None:
+        data = {
+            "library": {
+                "funscripts_dir": str(self.funscripts_dir),
+                "images_dir": str(self.images_dir),
+                "metadata_dir": str(self.metadata_dir),
+                "cache_dir": str(self.cache_dir),
+                "logs_dir": str(self.logs_dir),
+                "database": str(self.database),
+                "index_file": str(self.index_file),
+                "index_hash_file": "index-hash.sha",
+            },
+            "github": {
+                "enabled": self.github_enabled,
+                "auto_push": self.github_auto_push,
+                "owner": self.github_owner,
+                "repo": self.github_repo,
+                "branch": self.github_branch,
+                "remote_url": self.github_remote_url,
+                "raw_base_url": self.raw_base_url,
+            },
+            "eroscripts": {"enabled": self.eroscripts_enabled},
+            "video_sources": {
+                "xtoys_supported_sites": list(self.xtoys_supported_video_sites),
+                "tag_presets": list(self.tag_presets),
+            },
+        }
+        path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
     def ensure_directories(
         self,

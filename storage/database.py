@@ -210,6 +210,7 @@ class Database:
             VALUES (
                 ?,
                 ?,
+                ?,
                 datetime('now'),
                 datetime('now')
             )
@@ -229,7 +230,8 @@ class Database:
         title: str | None = None,
         display_name: str | None = None,
         creator: str | None = None,
-        eroscripts_url: str | None = None
+        eroscripts_url: str | None = None,
+        thumbnail: str | None = None
     ) -> int:
 
         cursor = self.connect().execute(
@@ -242,10 +244,12 @@ class Database:
                 display_name,
                 creator,
                 eroscripts_url,
+                thumbnail,
                 created_at,
                 updated_at
             )
             VALUES (
+                ?,
                 ?,
                 ?,
                 ?,
@@ -262,7 +266,8 @@ class Database:
                 title,
                 display_name,
                 creator,
-                eroscripts_url
+                eroscripts_url,
+                thumbnail
             )
         )
 
@@ -277,7 +282,8 @@ class Database:
         title: str | None = None,
         display_name: str | None = None,
         creator: str | None = None,
-        eroscripts_url: str | None = None
+        eroscripts_url: str | None = None,
+        thumbnail: str | None = None
     ) -> None:
 
         self.connect().execute(
@@ -288,6 +294,7 @@ class Database:
                 display_name=?,
                 creator=?,
                 eroscripts_url=?,
+                thumbnail=COALESCE(?, thumbnail),
                 updated_at=datetime('now')
             WHERE id=?
             """,
@@ -297,6 +304,7 @@ class Database:
                 display_name,
                 creator,
                 eroscripts_url,
+                thumbnail,
                 script_id
             )
         )

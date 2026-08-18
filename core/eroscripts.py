@@ -18,6 +18,7 @@ class EroScriptsImportResult:
 
     creator: str | None = None
     tags: list[str] = field(default_factory=list)
+    thumbnail: str | None = None
 
     video_site: str | None = None
     video_title: str | None = None
@@ -197,7 +198,7 @@ class EroScriptsImporter:
                 results.append(EroScriptsImportResult(
                     page_url=url, script_url=script_url, filename=filename,
                     content=content, title=title, creator=metadata["creator"],
-                    tags=metadata["tags"], video_candidates=result_candidates,
+                    tags=metadata["tags"], thumbnail=metadata["thumbnail"], video_candidates=result_candidates,
                     duration=metadata["duration"], action_count=metadata["action_count"],
                     average_speed=metadata["average_speed"], content_hash=content_hash
                 ))
@@ -394,6 +395,7 @@ class EroScriptsImporter:
                 title=title,
                 creator=metadata["creator"],
                 tags=metadata["tags"],
+                thumbnail=metadata["thumbnail"],
                 video_site=metadata["video_site"],
                 video_title=metadata["video_title"],
                 video_url=metadata["video_url"],
@@ -986,6 +988,53 @@ class EroScriptsImporter:
         return blocks
 
     @staticmethod
+    def extract_thumbnail(page, title: str) -> str | None:
+        """Extract the best thumbnail/image URL exposed by an EroScripts topic.
+
+        Prefer OpenGraph/Twitter metadata, then fall back to a topic image whose
+        alt text matches the topic title. The returned URL is kept remote so the
+        library can publish it without copying image bytes into the repository.
+        """
+        try:
+            for selector, attribute in (
+                ('meta[property="og:image"]', "content"),
+                ('meta[name="twitter:image"]', "content"),
+                ('meta[property="og:image:url"]', "content"),
+            ):
+                locator = page.locator(selector)
+                if locator.count():
+                    value = (locator.first.get_attribute(attribute) or "").strip()
+                    if value:
+                        return urljoin(page.url, value)
+
+            if title:
+                images = page.locator("img")
+                title_lower = title.strip().lower()
+                for index in range(images.count()):
+                    image = images.nth(index)
+                    alt = " ".join((image.get_attribute("alt") or "").split())
+                    src = (image.get_attribute("src") or "").strip()
+                    if not src:
+                        continue
+                    if alt.lower() == title_lower:
+                        return urljoin(page.url, src)
+
+                # Some Discourse pages use an alt that contains the topic title
+                # plus a small suffix. Prefer those before falling back further.
+                for index in range(images.count()):
+                    image = images.nth(index)
+                    alt = " ".join((image.get_attribute("alt") or "").split())
+                    src = (image.get_attribute("src") or "").strip()
+                    if not src:
+                        continue
+                    if title_lower and title_lower in alt.lower() and len(alt) < len(title) + 80:
+                        return urljoin(page.url, src)
+        except Exception:
+            return None
+
+        return None
+
+    @staticmethod
     def extract_metadata(
         page,
         title: str
@@ -1030,6 +1079,11 @@ class EroScriptsImporter:
                 page,
                 title
             )
+        )
+
+        thumbnail = EroScriptsImporter.extract_thumbnail(
+            page,
+            title
         )
 
         # -------------------------------------------------
@@ -1162,6 +1216,7 @@ class EroScriptsImporter:
         return {
             "creator": creator,
             "tags": tags,
+            "thumbnail": thumbnail,
             "video_site": video_site,
             "video_title": video_title,
             "video_url": video_url,
