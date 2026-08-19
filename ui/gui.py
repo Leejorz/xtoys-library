@@ -4,6 +4,8 @@ import shutil
 import threading
 import tkinter as tk
 from pathlib import Path
+
+from core.thumbnails import ThumbnailExtractor
 from tkinter import filedialog, messagebox, ttk
 
 
@@ -21,6 +23,33 @@ class LibraryGUI:
         self.count_var = tk.StringVar(value="")
         self._build_main_window()
         self.refresh_count()
+
+    @staticmethod
+    def _add_text_context_menu(widget):
+        """Provide standard Cut/Copy/Paste/Select All on text-entry widgets."""
+        menu = tk.Menu(widget, tearoff=False)
+
+        def do(action):
+            try:
+                widget.event_generate(action)
+            except tk.TclError:
+                pass
+
+        menu.add_command(label="Cut", command=lambda: do("<<Cut>>"))
+        menu.add_command(label="Copy", command=lambda: do("<<Copy>>"))
+        menu.add_command(label="Paste", command=lambda: do("<<Paste>>"))
+        menu.add_separator()
+        menu.add_command(label="Select All", command=lambda: do("<<SelectAll>>"))
+
+        def popup(event):
+            try:
+                menu.tk_popup(event.x_root, event.y_root)
+            finally:
+                menu.grab_release()
+
+        widget.bind("<Button-3>", popup, add="+")
+        widget.bind("<Control-a>", lambda _e: (do("<<SelectAll>>"), "break")[1], add="+")
+        return widget
 
     def _build_main_window(self):
         outer = ttk.Frame(self.root, padding=24)
@@ -64,14 +93,14 @@ class LibraryGUI:
         activity_frame = ttk.Frame(status)
         activity_frame.pack(fill="both", expand=True)
 
-        self.activity_text = tk.Text(
+        self.activity_text = self._add_text_context_menu(tk.Text(
             activity_frame,
             height=5,
             wrap="word",
             state="disabled",
             relief="sunken",
             borderwidth=1,
-        )
+        ))
         activity_scroll = ttk.Scrollbar(
             activity_frame,
             orient="vertical",
@@ -166,7 +195,7 @@ class LibraryGUI:
         url_frame = ttk.LabelFrame(page1, text="EroScripts page", padding=12)
         url_frame.pack(fill="x", pady=(0, 18))
         url_var = tk.StringVar()
-        url_entry = ttk.Entry(url_frame, textvariable=url_var)
+        url_entry = self._add_text_context_menu(ttk.Entry(url_frame, textvariable=url_var))
         url_entry.pack(fill="x")
 
         page1_status = tk.StringVar(value="")
@@ -359,9 +388,68 @@ class LibraryGUI:
         ).pack(anchor="w", pady=(0, 14))
 
         save_frame = ttk.LabelFrame(page4, text="Import summary", padding=10)
-        save_frame.pack(fill="both", expand=True, pady=(0, 14))
-        save_text = tk.Text(save_frame, height=12, wrap="word", state="disabled")
+        save_frame.pack(fill="both", expand=True, pady=(0, 10))
+        save_text = self._add_text_context_menu(tk.Text(save_frame, height=8, wrap="word", state="disabled"))
         save_text.pack(fill="both", expand=True)
+
+        # Topic tags are detected automatically but remain editable before
+        # anything is written to SQLite.  Presets are available as simple
+        # checkboxes so common tags never have to be typed repeatedly.
+        import_tag_frame = ttk.LabelFrame(page4, text="Tags for this EroScripts import", padding=8)
+        import_tag_frame.pack(fill="x", pady=(0, 10))
+        import_tag_vars = {}
+        import_manual_tag_var = tk.StringVar()
+        import_tag_checks = ttk.Frame(import_tag_frame)
+        import_tag_checks.pack(fill="x")
+        import_manual_row = ttk.Frame(import_tag_frame)
+        import_manual_row.pack(fill="x", pady=(8, 0))
+
+        def rebuild_import_tag_selector(results):
+            for child in import_tag_checks.winfo_children():
+                child.destroy()
+            for child in import_manual_row.winfo_children():
+                child.destroy()
+            import_tag_vars.clear()
+            import_manual_tag_var.set("")
+
+            detected_tags = []
+            for result in results:
+                for tag in getattr(result, "tags", []) or []:
+                    if tag and tag not in detected_tags:
+                        detected_tags.append(tag)
+
+            preset_tags = list(self.application.config.tag_presets)
+            ordered = detected_tags + [tag for tag in preset_tags if tag not in detected_tags]
+            for column, tag in enumerate(ordered):
+                var = tk.BooleanVar(value=(tag in detected_tags))
+                import_tag_vars[tag] = var
+                ttk.Checkbutton(
+                    import_tag_checks,
+                    text=tag,
+                    variable=var,
+                ).grid(row=column // 4, column=column % 4, sticky="w", padx=(0, 14), pady=2)
+
+            ttk.Label(import_manual_row, text="Add tag:").pack(side="left")
+            manual_entry = self._add_text_context_menu(
+                ttk.Entry(import_manual_row, textvariable=import_manual_tag_var, width=28)
+            )
+            manual_entry.pack(side="left", padx=(6, 6))
+
+            def add_manual_tag():
+                value = import_manual_tag_var.get().strip()
+                if not value:
+                    return
+                if value not in import_tag_vars:
+                    import_tag_vars[value] = tk.BooleanVar(value=True)
+                    index = len(import_tag_vars) - 1
+                    ttk.Checkbutton(
+                        import_tag_checks, text=value, variable=import_tag_vars[value]
+                    ).grid(row=index // 4, column=index % 4, sticky="w", padx=(0, 14), pady=2)
+                else:
+                    import_tag_vars[value].set(True)
+                import_manual_tag_var.set("")
+
+            ttk.Button(import_manual_row, text="Add", command=add_manual_tag).pack(side="left")
 
         save_status = tk.StringVar(value="")
         ttk.Label(page4, textvariable=save_status, wraplength=640).pack(anchor="w", pady=(0, 10))
@@ -466,7 +554,7 @@ class LibraryGUI:
                 ttk.Label(box, text="Video Source URL:").pack(anchor="w")
                 entry_row = ttk.Frame(box)
                 entry_row.pack(fill="x", pady=(5, 5))
-                entry = ttk.Entry(entry_row, textvariable=var)
+                entry = self._add_text_context_menu(ttk.Entry(entry_row, textvariable=var))
                 entry.pack(side="left", fill="x", expand=True)
 
                 detected_var = tk.StringVar(value="Not detected")
@@ -540,6 +628,7 @@ class LibraryGUI:
                     f"Thumbnail: {getattr(result, 'thumbnail', None) or '—'}\n\n",
                 )
             save_text.config(state="disabled")
+            rebuild_import_tag_selector(results_holder["value"])
             save_status.set(f"Ready to save {len(results_holder['value'])} funscript(s).")
             show_page("save")
 
@@ -552,7 +641,12 @@ class LibraryGUI:
                 # IMPORTANT: database work is intentionally performed on the
                 # Tkinter/main thread. The background worker only uses
                 # Playwright and returns plain result objects.
+                selected_tags = [
+                    tag for tag, var in import_tag_vars.items()
+                    if var.get()
+                ]
                 for result in results_holder["value"]:
+                    result.tags = list(selected_tags)
                     self.application.save_eroscripts_import(
                         result,
                         eroscripts_url_holder["value"],
@@ -756,11 +850,11 @@ class LibraryGUI:
 
         message_frame = ttk.LabelFrame(frame, text="Commit message", padding=10)
         message_frame.pack(fill="x", pady=(0, 12))
-        ttk.Entry(message_frame, textvariable=commit_message).pack(fill="x")
+        self._add_text_context_menu(ttk.Entry(message_frame, textvariable=commit_message)).pack(fill="x")
 
         log_frame = ttk.LabelFrame(frame, text="Publish progress", padding=8)
         log_frame.pack(fill="both", expand=True, pady=(0, 12))
-        log = tk.Text(log_frame, height=12, wrap="word", state="disabled")
+        log = self._add_text_context_menu(tk.Text(log_frame, height=12, wrap="word", state="disabled"))
         log.pack(fill="both", expand=True)
 
         buttons = ttk.Frame(frame)
@@ -898,7 +992,7 @@ class LibraryGUI:
 
         ttk.Label(top, text="Search:").pack(side="left")
         search_var = tk.StringVar()
-        search = ttk.Entry(top, textvariable=search_var)
+        search = self._add_text_context_menu(ttk.Entry(top, textvariable=search_var))
         search.pack(side="left", fill="x", expand=True, padx=(8, 0))
 
         columns = ("title", "creator", "site", "video_id")
@@ -1099,10 +1193,10 @@ class LibraryGUI:
             )
             url_frame.pack(fill="x", pady=(0, 10))
 
-            url_entry = ttk.Entry(
+            url_entry = self._add_text_context_menu(ttk.Entry(
                 url_frame,
                 textvariable=url_var,
-            )
+            ))
             url_entry.pack(fill="x")
 
             detected = ttk.Frame(frame)
@@ -1113,11 +1207,11 @@ class LibraryGUI:
                 text="Site:",
             ).grid(row=0, column=0, sticky="w", padx=(0, 8))
 
-            site_entry = ttk.Entry(
+            site_entry = self._add_text_context_menu(ttk.Entry(
                 detected,
                 textvariable=site_var,
                 width=28,
-            )
+            ))
             site_entry.grid(row=0, column=1, sticky="ew", padx=(0, 18))
 
             ttk.Label(
@@ -1125,11 +1219,11 @@ class LibraryGUI:
                 text="Video ID:",
             ).grid(row=0, column=2, sticky="w", padx=(0, 8))
 
-            id_entry = ttk.Entry(
+            id_entry = self._add_text_context_menu(ttk.Entry(
                 detected,
                 textvariable=id_var,
                 width=18,
-            )
+            ))
             id_entry.grid(row=0, column=3, sticky="ew")
 
             detected.columnconfigure(1, weight=1)
@@ -1235,11 +1329,11 @@ class LibraryGUI:
             manual_frame.pack(fill="x")
 
             tag_var = tk.StringVar()
-            ttk.Entry(
+            self._add_text_context_menu(ttk.Entry(
                 manual_frame,
                 textvariable=tag_var,
                 width=24,
-            ).pack(fill="x", pady=(0, 6))
+            )).pack(fill="x", pady=(0, 6))
 
             def refresh_tags():
                 tags_list.delete(0, "end")
@@ -1385,6 +1479,10 @@ class LibraryGUI:
                             source_url=url,
                         )
 
+                    thumbnail = ThumbnailExtractor.fetch(url)
+                    if thumbnail:
+                        self.application.database.update_script_thumbnail(script_id, thumbnail)
+
                     self.application.build_index()
 
                     editor.destroy()
@@ -1505,13 +1603,206 @@ class LibraryGUI:
 
     def show_settings(self):
         config = self.application.config
-        messagebox.showinfo(
-            "Settings",
-            f"Database: {config.database}\n"
-            f"Funscripts: {config.funscripts_dir}\n"
-            f"Images: {config.images_dir}\n"
-            f"Metadata: {config.metadata_dir}\n"
-            f"Index: {config.index_file}\n"
-            f"GitHub raw base: {getattr(config, 'raw_base_url', '')}",
-            parent=self.root,
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Settings")
+        dialog.geometry("720x700")
+        dialog.minsize(640, 600)
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        outer = ttk.Frame(dialog, padding=16)
+        outer.pack(fill="both", expand=True)
+
+        canvas = tk.Canvas(outer, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        body = ttk.Frame(canvas)
+        body.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        window_id = canvas.create_window((0, 0), window=body, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.bind("<Configure>", lambda e: canvas.itemconfigure(window_id, width=e.width))
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        def field(parent, label, value, row, width=54):
+            ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", padx=(0, 10), pady=5)
+            var = tk.StringVar(value=str(value))
+            self._add_text_context_menu(ttk.Entry(parent, textvariable=var, width=width)).grid(row=row, column=1, sticky="ew", pady=5)
+            return var
+
+        github_frame = ttk.LabelFrame(body, text="GitHub Publishing", padding=12)
+        github_frame.pack(fill="x", pady=(0, 12))
+        github_frame.columnconfigure(1, weight=1)
+
+        github_enabled = tk.BooleanVar(value=config.github_enabled)
+        auto_push = tk.BooleanVar(value=config.github_auto_push)
+        ttk.Checkbutton(github_frame, text="Enable GitHub publishing", variable=github_enabled).grid(row=0, column=0, columnspan=2, sticky="w", pady=4)
+        ttk.Checkbutton(github_frame, text="Automatically push after publishing", variable=auto_push).grid(row=1, column=0, columnspan=2, sticky="w", pady=4)
+
+        owner = field(github_frame, "GitHub owner / account", getattr(config, "github_owner", "leejorz"), 2)
+        repo = field(github_frame, "Repository", getattr(config, "github_repo", "xtoys-library"), 3)
+        branch = field(github_frame, "Branch", getattr(config, "github_branch", "main"), 4)
+        remote = field(github_frame, "Remote URL (optional)", getattr(config, "github_remote_url", ""), 5)
+        raw_base = field(github_frame, "Raw funscript base URL", config.raw_base_url, 6)
+
+        def suggest_raw_url(*_):
+            o, r, b = owner.get().strip(), repo.get().strip(), branch.get().strip() or "main"
+            if o and r and (not raw_base.get().strip() or raw_base.get().startswith("https://raw.githubusercontent.com/")):
+                raw_base.set(f"https://raw.githubusercontent.com/{o}/{r}/{b}/funscripts/")
+
+        ttk.Button(github_frame, text="Use GitHub raw URL", command=suggest_raw_url).grid(row=7, column=1, sticky="e", pady=(2, 4))
+
+        eroscripts_frame = ttk.LabelFrame(body, text="EroScripts", padding=12)
+        eroscripts_frame.pack(fill="x", pady=(0, 12))
+        eroscripts_enabled = tk.BooleanVar(value=config.eroscripts_enabled)
+        ttk.Checkbutton(
+            eroscripts_frame,
+            text="Enable EroScripts integration",
+            variable=eroscripts_enabled,
+        ).pack(anchor="w")
+
+        ttk.Label(
+            eroscripts_frame,
+            text=(
+                "Open the app's dedicated EroScripts browser profile to log in or refresh an expired session. "
+                "Your login cookies are saved locally and reused by future imports."
+            ),
+            wraplength=630,
+        ).pack(anchor="w", fill="x", pady=(8, 6))
+
+        def login_eroscripts_from_settings():
+            self.set_status("Opening EroScripts login...")
+            self.append_activity("Opening the persistent EroScripts login browser.")
+
+            def confirm_login():
+                return messagebox.askokcancel(
+                    "Finish EroScripts Login",
+                    (
+                        "A browser window has been opened to EroScripts.\n\n"
+                        "Log in normally, including any authenticator code if requested. "
+                        "Keep the browser window open until you are fully logged in.\n\n"
+                        "Then return here and click OK to save the session. "
+                        "Click Cancel if you do not want to confirm this login attempt."
+                    ),
+                    parent=dialog,
+                )
+
+            try:
+                logged_in = self.application.login_eroscripts(
+                    confirmation_callback=confirm_login
+                )
+                if not logged_in:
+                    self.set_status("EroScripts login cancelled.")
+                    self.append_activity("EroScripts login was cancelled.")
+                    return
+
+                self.set_status("EroScripts login saved successfully.")
+                self.append_activity("EroScripts login session saved for future imports.")
+                messagebox.showinfo(
+                    "EroScripts Login Saved",
+                    (
+                        "Your EroScripts browser session was saved successfully.\n\n"
+                        "Future EroScripts imports will reuse this login until the session expires."
+                    ),
+                    parent=dialog,
+                )
+            except Exception as error:
+                self.set_status("EroScripts login failed.")
+                self.append_activity(f"EroScripts login failed: {error}")
+                messagebox.showerror(
+                    "EroScripts Login Failed",
+                    str(error),
+                    parent=dialog,
+                )
+
+        ttk.Button(
+            eroscripts_frame,
+            text="Open EroScripts Login",
+            command=login_eroscripts_from_settings,
+        ).pack(anchor="w", pady=(2, 0))
+
+        library_frame = ttk.LabelFrame(body, text="Library Paths", padding=12)
+        library_frame.pack(fill="x", pady=(0, 12))
+        library_frame.columnconfigure(1, weight=1)
+        funscripts_dir = field(library_frame, "Funscripts directory", config.funscripts_dir, 0)
+        images_dir = field(library_frame, "Images directory", config.images_dir, 1)
+        metadata_dir = field(library_frame, "Metadata directory", config.metadata_dir, 2)
+        cache_dir = field(library_frame, "Cache directory", config.cache_dir, 3)
+        logs_dir = field(library_frame, "Logs directory", config.logs_dir, 4)
+        database = field(library_frame, "Database", config.database, 5)
+        index_file = field(library_frame, "Index file", config.index_file, 6)
+
+        sources_frame = ttk.LabelFrame(body, text="Supported Video Sites", padding=12)
+        sources_frame.pack(fill="x", pady=(0, 12))
+        sources_frame.columnconfigure(0, weight=1)
+        sites_var = tk.StringVar(value=", ".join(config.xtoys_supported_video_sites))
+        self._add_text_context_menu(ttk.Entry(sources_frame, textvariable=sites_var)).grid(row=0, column=0, sticky="ew")
+        ttk.Label(sources_frame, text="Comma-separated site domains/names. Changes apply on the next launch.").grid(row=1, column=0, sticky="w", pady=(5, 0))
+
+        tags_frame = ttk.LabelFrame(body, text="Preset Tags", padding=12)
+        tags_frame.pack(fill="x", pady=(0, 12))
+        tags_var = tk.StringVar(value=", ".join(config.tag_presets))
+        self._add_text_context_menu(ttk.Entry(tags_frame, textvariable=tags_var)).pack(fill="x")
+        ttk.Label(tags_frame, text="Comma-separated presets shown in Edit Video.").pack(anchor="w", pady=(5, 0))
+
+        note = ttk.Label(
+            body,
+            text=(
+                "Changing the GitHub owner/repository/branch updates the publisher target and generated raw funscript URLs. "
+                "Git authentication is handled by your local Git credential setup. The current local branch must match the configured branch."
+            ),
+            wraplength=650,
         )
+        note.pack(fill="x", pady=(0, 12))
+
+        buttons = ttk.Frame(outer)
+        buttons.pack(fill="x", pady=(10, 0))
+
+        def save_settings():
+            try:
+                owner_value = owner.get().strip()
+                repo_value = repo.get().strip()
+                branch_value = branch.get().strip() or "main"
+                raw_value = raw_base.get().strip()
+                if not raw_value and owner_value and repo_value:
+                    raw_value = f"https://raw.githubusercontent.com/{owner_value}/{repo_value}/{branch_value}/funscripts/"
+
+                sites = tuple(x.strip().lower() for x in sites_var.get().split(",") if x.strip())
+                presets = tuple(x.strip() for x in tags_var.get().split(",") if x.strip())
+                if not sites:
+                    raise ValueError("At least one supported video site is required.")
+                if not presets:
+                    raise ValueError("At least one tag preset is required.")
+
+                from app.config import AppConfig
+                updated = AppConfig(
+                    funscripts_dir=Path(funscripts_dir.get().strip() or "funscripts"),
+                    images_dir=Path(images_dir.get().strip() or "images"),
+                    metadata_dir=Path(metadata_dir.get().strip() or "metadata"),
+                    cache_dir=Path(cache_dir.get().strip() or "cache"),
+                    logs_dir=Path(logs_dir.get().strip() or "logs"),
+                    database=Path(database.get().strip() or "storage/library.db"),
+                    index_file=Path(index_file.get().strip() or "index.json"),
+                    github_enabled=github_enabled.get(),
+                    github_auto_push=auto_push.get(),
+                    raw_base_url=raw_value,
+                    github_owner=owner_value,
+                    github_repo=repo_value,
+                    github_branch=branch_value,
+                    github_remote_url=remote.get().strip(),
+                    eroscripts_enabled=eroscripts_enabled.get(),
+                    xtoys_supported_video_sites=sites,
+                    tag_presets=presets,
+                )
+                updated.save(self.application.root / "config.json")
+                self.application.config = updated
+                updated.ensure_directories(self.application.root)
+                dialog.destroy()
+                self.set_status("Settings saved successfully.")
+                self.append_activity("Settings updated. GitHub publishing now uses the configured destination.")
+            except Exception as error:
+                messagebox.showerror("Save Settings Failed", str(error), parent=dialog)
+
+        ttk.Button(buttons, text="Save", command=save_settings).pack(side="right")
+        ttk.Button(buttons, text="Cancel", command=dialog.destroy).pack(side="right", padx=(0, 8))
+
+        canvas.bind_all("<MouseWheel>", lambda event: canvas.yview_scroll(int(-event.delta / 120), "units"))

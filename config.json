@@ -5,23 +5,36 @@
     "metadata_dir": "metadata",
     "cache_dir": "cache",
     "logs_dir": "logs",
-    "database": "storage/library.db",
+    "database": "storage\\library.db",
     "index_file": "index.json",
     "index_hash_file": "index-hash.sha"
   },
   "github": {
     "enabled": false,
     "auto_push": false,
+    "owner": "leejorz",
+    "repo": "xtoys-library",
+    "branch": "main",
+    "remote_url": "",
     "raw_base_url": "https://raw.githubusercontent.com/leejorz/xtoys-library/main/funscripts/"
   },
   "eroscripts": {
-    "enabled": false
+    "enabled": true
   },
   "video_sources": {
     "xtoys_supported_sites": [
       "eporner.com",
       "rule34video.com",
-      "noodledude.io"
+      "noodledude.io",
+      "spankbang.com",
+      "pmvhaven.com"
+    ],
+    "tag_presets": [
+      "HMV",
+      "PMV",
+      "Asian",
+      "White",
+      "TikTok"
     ]
   }
 }

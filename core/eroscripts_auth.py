@@ -46,7 +46,7 @@ class EroScriptsAuth:
 
         return self.context
 
-    def login(self):
+    def login(self, confirmation_callback=None):
 
         if self.context is None:
             self.start()
@@ -75,15 +75,19 @@ class EroScriptsAuth:
             "Enter your authenticator code when requested."
         )
         print()
-        print(
-            "When you have successfully logged in,"
-        )
-        print(
-            "return here and press ENTER."
-        )
-        print()
-
-        input("Press ENTER after login is complete... ")
+        if confirmation_callback is None:
+            print(
+                "When you have successfully logged in,"
+            )
+            print(
+                "return here and press ENTER."
+            )
+            print()
+            input("Press ENTER after login is complete... ")
+        else:
+            confirmed = confirmation_callback()
+            if not confirmed:
+                return False
 
         if not self.is_logged_in(page):
 

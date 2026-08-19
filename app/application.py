@@ -11,6 +11,7 @@ from storage.database import Database
 from ui.menu import MainMenu
 from core.scanner import LibraryScanner
 from core.eroscripts import EroScriptsImporter
+from core.thumbnails import ThumbnailExtractor
 from core.eroscripts_auth import EroScriptsAuth
 from builders.index_builder import IndexBuilder
 
@@ -483,16 +484,40 @@ class Application:
         print("\nVALIDATION PASSED.")
         return True
 
+    def _configured_git_remote(self) -> str:
+        configured = getattr(self.config, "github_remote_url", "").strip()
+        if configured:
+            return configured
+        owner = getattr(self.config, "github_owner", "").strip()
+        repo = getattr(self.config, "github_repo", "").strip()
+        if owner and repo:
+            return f"https://github.com/{owner}/{repo}.git"
+        return ""
+
+    def _sync_git_remote_to_settings(self, run_git) -> str:
+        desired = self._configured_git_remote()
+        if not desired:
+            current = run_git("remote", "get-url", "origin")
+            return current.strip()
+        current_result = run_git("remote", "get-url", "origin", check=False)
+        current = current_result.stdout.strip()
+        if current != desired:
+            if current_result.returncode == 0:
+                run_git("remote", "set-url", "origin", desired)
+            else:
+                run_git("remote", "add", "origin", desired)
+        return desired
+
     def git_publish_preview(self) -> dict:
         """Return the current GitHub publish target and working-tree changes.
 
-        Fetch the remote first so the GUI can detect when origin/main has
+        Fetch the remote first so the GUI can detect when origin/{configured_branch} has
         moved ahead of the local branch before anything is committed.
         """
         if not (self.root / ".git").exists():
             raise RuntimeError("This project folder is not a Git repository.")
 
-        def run_git(*args):
+        def run_git(*args, check=True):
             result = subprocess.run(
                 ["git", *args],
                 cwd=self.root,
@@ -501,29 +526,29 @@ class Application:
                 encoding="utf-8",
                 errors="replace",
             )
-            if result.returncode != 0:
+            if check and result.returncode != 0:
                 details = (result.stderr or result.stdout).strip()
                 raise RuntimeError(details or f"git {' '.join(args)} failed")
-            return result.stdout.strip()
+            return result.stdout.strip() if check else result
 
         branch = run_git("branch", "--show-current")
-        if branch != "main":
+        configured_branch = getattr(self.config, "github_branch", "main") or "main"
+        if branch != configured_branch:
             raise RuntimeError(
-                f"GitHub publishing is configured for the main branch, but the current branch is '{branch or 'detached HEAD'}'."
+                f"GitHub publishing is configured for the {configured_branch} branch, but the current branch is '{branch or 'detached HEAD'}'."
             )
 
-        remote = run_git("remote", "get-url", "origin")
+        remote = self._sync_git_remote_to_settings(run_git)
         if not remote:
             raise RuntimeError("No GitHub origin remote is configured.")
 
-        # Refresh origin/main without changing the working tree.
-        run_git("fetch", "origin", "main")
+        run_git("fetch", "origin", configured_branch)
 
         status = run_git("status", "--short")
         files = [line for line in status.splitlines() if line.strip()]
 
-        ahead = int(run_git("rev-list", "--count", "origin/main..HEAD") or "0")
-        behind = int(run_git("rev-list", "--count", "HEAD..origin/main") or "0")
+        ahead = int(run_git("rev-list", "--count", f"origin/{configured_branch}..HEAD") or "0")
+        behind = int(run_git("rev-list", "--count", f"HEAD..origin/{configured_branch}") or "0")
 
         return {
             "branch": branch,
@@ -589,7 +614,7 @@ class Application:
         return True, "\n".join(lines)
 
     def git_publish(self, commit_message: str = "Update xToys Library") -> dict:
-        """Safely publish the current working tree to ``origin/main``.
+        """Safely publish the current working tree to ``origin/{configured_branch}``.
 
         The local project is treated as the source of truth. If GitHub has a
         newer commit, the publisher merges that commit into the local branch
@@ -626,14 +651,15 @@ class Application:
         if not git_dir.exists():
             raise RuntimeError("This project folder is not a Git repository.")
 
-        remote = run_git("remote", "get-url", "origin").stdout.strip()
+        remote = self._sync_git_remote_to_settings(run_git)
         if not remote:
             raise RuntimeError("No GitHub origin remote is configured.")
 
         branch = run_git("branch", "--show-current").stdout.strip()
-        if branch != "main":
+        configured_branch = getattr(self.config, "github_branch", "main") or "main"
+        if branch != configured_branch:
             raise RuntimeError(
-                "GitHub publishing is configured for the main branch, but "
+                f"GitHub publishing is configured for the {configured_branch} branch, but "
                 f"the current branch is '{branch or 'detached HEAD'}'."
             )
 
@@ -668,9 +694,9 @@ class Application:
         if not attributes_path.exists():
             attributes_path.write_text(attributes_content, encoding="utf-8", newline="\n")
 
-        # Refresh origin/main before deciding how much synchronization is
+        # Refresh origin/{configured_branch} before deciding how much synchronization is
         # needed. This does not modify the working tree.
-        run_git("fetch", "origin", "main")
+        run_git("fetch", "origin", configured_branch)
 
         backup_root = (
             git_dir
@@ -692,7 +718,7 @@ class Application:
                     continue
 
                 remote_entry = run_git(
-                    "cat-file", "-e", f"origin/main:{rel}", check=False
+                    "cat-file", "-e", f"origin/{configured_branch}:{rel}", check=False
                 )
                 if remote_entry.returncode != 0:
                     continue
@@ -741,7 +767,7 @@ class Application:
                 "--no-edit",
                 "-X",
                 "ours",
-                "origin/main",
+                f"origin/{configured_branch}",
                 check=False,
             )
             merge_started = merge.returncode == 0
@@ -790,17 +816,17 @@ class Application:
 
             # Push the synchronized history. If GitHub moves during this
             # operation, merge the new remote tip once more and retry.
-            push = run_git("push", "-u", "origin", "main", check=False)
+            push = run_git("push", "-u", "origin", configured_branch, check=False)
 
             if push.returncode != 0:
-                run_git("fetch", "origin", "main")
+                run_git("fetch", "origin", configured_branch)
                 retry_merge = run_git(
                     "merge",
                     "--no-commit",
                     "--no-edit",
                     "-X",
                     "ours",
-                    "origin/main",
+                    f"origin/{configured_branch}",
                     check=False,
                 )
                 if retry_merge.returncode != 0:
@@ -818,7 +844,7 @@ class Application:
                 commit_hash = run_git(
                     "rev-parse", "--short", "HEAD"
                 ).stdout.strip()
-                push = run_git("push", "-u", "origin", "main", check=False)
+                push = run_git("push", "-u", "origin", configured_branch, check=False)
 
             if push.returncode != 0:
                 details = (push.stderr or push.stdout).strip()
@@ -968,6 +994,10 @@ class Application:
         result.video_title = title
         result.video_url = url
         result.video_id = video_id
+
+        source_thumbnail = ThumbnailExtractor.fetch(url)
+        if source_thumbnail:
+            result.thumbnail_url = source_thumbnail
 
     def apply_placeholder_video_source(self, result) -> None:
         """Apply the project's fixed placeholder source to an import result."""
@@ -1223,6 +1253,18 @@ class Application:
             result.tags
         )
 
+        # Prefer the actual video-source thumbnail.  EroScripts preview is
+        # retained as the fallback.  Empty extraction never erases an
+        # existing thumbnail.
+        thumbnail = None
+        source_url = getattr(result, "video_url", None)
+        if source_url:
+            thumbnail = ThumbnailExtractor.fetch(source_url)
+        if not thumbnail:
+            thumbnail = getattr(result, "thumbnail_url", None)
+        if thumbnail:
+            self.database.update_script_thumbnail(script_id, thumbnail)
+
         if result.video_site:
 
             video_id = (
@@ -1418,16 +1460,18 @@ class Application:
 
         return ""
 
-    def login_eroscripts(self):
+    def login_eroscripts(self, confirmation_callback=None):
+        """Open the persistent EroScripts browser profile and save its login session.
 
-        auth = EroScriptsAuth(
-            self.root
-        )
+        CLI callers can omit confirmation_callback and retain the existing
+        press-ENTER workflow. GUI callers provide a callback so the standalone
+        application never depends on console input.
+        """
+        auth = EroScriptsAuth(self.root)
 
         try:
-
-            auth.login()
-
+            return auth.login(confirmation_callback=confirmation_callback)
         finally:
-
+            # Chromium persistent contexts flush cookies/local storage into
+            # cache/eroscripts_session when the context is closed.
             auth.close()

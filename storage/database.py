@@ -173,6 +173,18 @@ class Database:
             (content_hash,)
         ).fetchone()
 
+    def update_script_thumbnail(
+        self,
+        script_id: int,
+        thumbnail: str | None
+    ) -> None:
+        """Update the existing thumbnail field without changing the schema."""
+        self.connect().execute(
+            "UPDATE scripts SET thumbnail=?, updated_at=datetime('now') WHERE id=?",
+            (thumbnail or "", script_id),
+        )
+        self.connection.commit()
+
     def update_filename(
         self,
         content_hash: str,
