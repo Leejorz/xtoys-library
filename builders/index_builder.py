@@ -1,6 +1,5 @@
 import hashlib
 import json
-import re
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
@@ -88,6 +87,31 @@ class IndexBuilder:
 
         return output_path, len(videos)
 
+    @staticmethod
+    def _thumbnail_slug(filename: str) -> str:
+        import re
+        stem = Path(filename or "thumbnail").stem.lower()
+        stem = re.sub(r"[^a-z0-9]+", "-", stem).strip("-")
+        return stem or "thumbnail"
+
+    def build_thumbnail_url(self, script) -> str:
+        """Match the bundled reference index without altering SQLite metadata."""
+        images_dir = self.root / self.config.images_dir
+        image_path = images_dir / f"{self._thumbnail_slug(script['filename'])}.jpeg"
+
+        if image_path.exists() and image_path.stat().st_size > 0:
+            owner = str(getattr(self.config, "github_owner", "") or "").strip()
+            repo = str(getattr(self.config, "github_repo", "") or "").strip()
+            branch = str(getattr(self.config, "github_branch", "main") or "main").strip()
+            if owner and repo:
+                rel = image_path.relative_to(self.root).as_posix()
+                return (
+                    f"https://raw.githubusercontent.com/{quote(owner, safe='')}/"
+                    f"{quote(repo, safe='')}/{quote(branch, safe='/')}/{quote(rel, safe='/')}"
+                )
+
+        return script["thumbnail"] or ""
+
     def build_video(self, script):
 
         script_id = script["id"]
@@ -167,40 +191,10 @@ class IndexBuilder:
 
             "last_checked": now,
 
-            "thumbnail": self.build_thumbnail_location(
-                filename,
-                script["thumbnail"] or ""
-            ),
+            "thumbnail": self.build_thumbnail_url(script),
 
             "displayName": display_name
         }
-
-
-    def build_thumbnail_location(self, filename: str, fallback: str) -> str:
-        """Use a repository thumbnail only when an exact normalized file exists.
-
-        This does not modify SQLite and does not alter site/id/script fields.
-        The local file is intentionally a small baseline JPEG sized to the
-        player canvas so thumbnail decoding cannot affect video association.
-        """
-        stem = Path(filename).stem.lower()
-        slug = re.sub(r"[^a-z0-9]+", "-", stem).strip("-") or "thumbnail"
-        image_path = self.root / self.config.images_dir / f"{slug}.jpeg"
-        if not image_path.exists():
-            return fallback
-
-        owner = str(getattr(self.config, "github_owner", "") or "").strip()
-        repo = str(getattr(self.config, "github_repo", "") or "").strip()
-        branch = str(getattr(self.config, "github_branch", "main") or "main").strip()
-        if not owner or not repo:
-            return fallback
-
-        rel = image_path.relative_to(self.root).as_posix()
-        return (
-            f"https://raw.githubusercontent.com/{quote(owner, safe='')}/"
-            f"{quote(repo, safe='')}/{quote(branch, safe='/')}/"
-            f"{quote(rel, safe='/')}"
-        )
 
     @staticmethod
     def normalize_site(site: str | None) -> str:
