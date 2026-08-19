@@ -262,6 +262,43 @@ class Application:
                     progress_callback(f"Could not download thumbnail for {script['filename']}")
         return migrated, failed
 
+    def _repair_rule34_thumbnail_urls(self, progress_callback=None) -> int:
+        """Undo repository-hosted Rule34 thumbnails from the prior patch.
+
+        Rule34Video entries were selectable before thumbnails were mirrored into
+        this repository.  Keep the real Rule34 site/id and restore the direct
+        preview URL, which is deterministically tied to the video ID.
+        """
+        repaired = 0
+        for script in self.database.all_scripts():
+            thumbnail = (script["thumbnail"] or "").strip()
+            if "raw.githubusercontent.com" not in thumbnail.lower() or "/images/" not in thumbnail.lower():
+                continue
+
+            source = self.database.get_video_source(script["id"])
+            if not source:
+                continue
+
+            site = str(source["site"] or "").strip().lower()
+            if site not in {"rule34video", "rule34video.com", "www.rule34video.com"}:
+                continue
+
+            video_id = str(source["video_id"] or "").strip()
+            if not video_id.isdigit():
+                continue
+
+            bucket = (int(video_id) // 1000) * 1000
+            direct_url = (
+                f"https://rule34video.com/contents/videos_screenshots/"
+                f"{bucket}/{video_id}/preview.jpg"
+            )
+            self.database.update_script_thumbnail(script["id"], direct_url)
+            repaired += 1
+            if progress_callback:
+                progress_callback(f"Restored direct Rule34Video thumbnail for {script['filename']}")
+
+        return repaired
+
     def build_index(self, progress_callback=None):
 
         def progress(message):
@@ -270,11 +307,9 @@ class Application:
 
         progress("Reading library records...")
 
-        migrated, failed = self._localize_external_thumbnails(progress_callback)
-        if migrated:
-            progress(f"Cached {migrated} thumbnail(s) in the repository images folder.")
-        if failed:
-            progress(f"Warning: {failed} external thumbnail(s) could not be downloaded.")
+        repaired = self._repair_rule34_thumbnail_urls(progress_callback)
+        if repaired:
+            progress(f"Restored {repaired} Rule34Video thumbnail URL(s).")
 
         builder = IndexBuilder(
             self.root,
@@ -1357,16 +1392,10 @@ class Application:
         if not thumbnail:
             thumbnail = getattr(result, "thumbnail_url", None)
         if thumbnail:
-            stored_thumbnail = self._store_repository_thumbnail(
-                script_id,
-                result.filename,
-                thumbnail,
-                referer=source_url or requested_url,
-            )
-            if not stored_thumbnail:
-                # Keep the detected URL as a fallback so it is not lost, but
-                # Build index.json will retry localizing it later.
-                self.database.update_script_thumbnail(script_id, thumbnail)
+            # Keep the source thumbnail URL directly.  Do not mirror thumbnails
+            # into this repository: that regression changed otherwise-working
+            # Rule34Video entries in the xToys player.
+            self.database.update_script_thumbnail(script_id, thumbnail)
 
         if result.video_site:
 
