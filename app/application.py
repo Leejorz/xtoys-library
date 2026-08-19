@@ -3,7 +3,7 @@ import json
 import sys
 import re
 import subprocess
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote
 
 from app.config import AppConfig
 from app.logger import setup_logging
@@ -182,6 +182,86 @@ class Application:
             "index_count": index_result["count"],
         }
 
+    @staticmethod
+    def _thumbnail_slug(filename: str) -> str:
+        stem = Path(filename or "thumbnail").stem.lower()
+        stem = re.sub(r"[^a-z0-9]+", "-", stem).strip("-")
+        return stem or "thumbnail"
+
+    def _repository_image_url(self, image_path: Path) -> str:
+        """Return the public raw-GitHub URL for a local repository image."""
+        owner = str(getattr(self.config, "github_owner", "") or "").strip()
+        repo = str(getattr(self.config, "github_repo", "") or "").strip()
+        branch = str(getattr(self.config, "github_branch", "main") or "main").strip()
+        rel = image_path.relative_to(self.root).as_posix()
+        if owner and repo:
+            return (
+                f"https://raw.githubusercontent.com/{quote(owner, safe='')}/"
+                f"{quote(repo, safe='')}/{quote(branch, safe='/')}/{quote(rel, safe='/')}"
+            )
+
+        # Fallback for older/custom config files whose raw_base_url points at
+        # the funscripts directory.
+        base = str(getattr(self.config, "raw_base_url", "") or "").rstrip("/")
+        if base.lower().endswith("/funscripts"):
+            base = base[:-len("/funscripts")]
+        return f"{base}/{quote(rel, safe='/')}" if base else rel
+
+    def _store_repository_thumbnail(
+        self,
+        script_id: int,
+        filename: str,
+        thumbnail_url: str | None,
+        referer: str | None = None,
+    ) -> str | None:
+        """Cache an external thumbnail in images/ and store its GitHub URL."""
+        if not thumbnail_url:
+            return None
+
+        value = thumbnail_url.strip()
+        # Already using this repository's image URL: leave it untouched.
+        if "raw.githubusercontent.com" in value.lower() and "/images/" in value.lower():
+            return value
+
+        images_dir = self.root / self.config.images_dir
+        stem = images_dir / self._thumbnail_slug(filename)
+        local_image = ThumbnailExtractor.download_image(
+            value,
+            stem,
+            referer=referer,
+        )
+        if local_image is None:
+            return None
+
+        public_url = self._repository_image_url(local_image)
+        self.database.update_script_thumbnail(script_id, public_url)
+        return public_url
+
+    def _localize_external_thumbnails(self, progress_callback=None) -> tuple[int, int]:
+        """Migrate hotlinked thumbnails to repository-hosted images."""
+        migrated = 0
+        failed = 0
+        for script in self.database.all_scripts():
+            thumbnail = (script["thumbnail"] or "").strip()
+            if not thumbnail or not thumbnail.lower().startswith(("http://", "https://")):
+                continue
+            if "raw.githubusercontent.com" in thumbnail.lower() and "/images/" in thumbnail.lower():
+                continue
+            source = self.database.get_video_source(script["id"])
+            referer = (source["source_url"] if source else None) or script["eroscripts_url"]
+            stored = self._store_repository_thumbnail(
+                script["id"], script["filename"], thumbnail, referer=referer
+            )
+            if stored:
+                migrated += 1
+                if progress_callback:
+                    progress_callback(f"Saved thumbnail locally for {script['filename']}")
+            else:
+                failed += 1
+                if progress_callback:
+                    progress_callback(f"Could not download thumbnail for {script['filename']}")
+        return migrated, failed
+
     def build_index(self, progress_callback=None):
 
         def progress(message):
@@ -189,6 +269,12 @@ class Application:
                 progress_callback(message)
 
         progress("Reading library records...")
+
+        migrated, failed = self._localize_external_thumbnails(progress_callback)
+        if migrated:
+            progress(f"Cached {migrated} thumbnail(s) in the repository images folder.")
+        if failed:
+            progress(f"Warning: {failed} external thumbnail(s) could not be downloaded.")
 
         builder = IndexBuilder(
             self.root,
@@ -1271,7 +1357,16 @@ class Application:
         if not thumbnail:
             thumbnail = getattr(result, "thumbnail_url", None)
         if thumbnail:
-            self.database.update_script_thumbnail(script_id, thumbnail)
+            stored_thumbnail = self._store_repository_thumbnail(
+                script_id,
+                result.filename,
+                thumbnail,
+                referer=source_url or requested_url,
+            )
+            if not stored_thumbnail:
+                # Keep the detected URL as a fallback so it is not lost, but
+                # Build index.json will retry localizing it later.
+                self.database.update_script_thumbnail(script_id, thumbnail)
 
         if result.video_site:
 

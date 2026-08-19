@@ -168,3 +168,65 @@ class ThumbnailExtractor:
         for score, value in candidates:
             best[value] = max(score, best.get(value, 0))
         return max(best.items(), key=lambda item: item[1])[0]
+
+    @classmethod
+    def download_image(
+        cls,
+        image_url: str | None,
+        destination_stem: Path,
+        referer: str | None = None,
+        timeout: float = 15.0,
+    ) -> Path | None:
+        """Download a detected thumbnail into the repository images folder.
+
+        xToys library thumbnails are most reliable when served from the same
+        GitHub repository as index.json.  Some video hosts block third-party
+        hotlinking even though their preview URL works in the source page.
+        """
+        if not image_url:
+            return None
+
+        url = image_url.strip()
+        if not re.match(r"^https?://", url, re.I):
+            return None
+
+        headers = {
+            "User-Agent": cls.USER_AGENT,
+            "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+        }
+        if referer:
+            headers["Referer"] = referer
+
+        try:
+            request = Request(url, headers=headers)
+            with urlopen(request, timeout=timeout) as response:
+                content_type = (response.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+                data = response.read(10_000_001)
+        except (HTTPError, URLError, TimeoutError, OSError):
+            return None
+
+        if not data or len(data) > 10_000_000:
+            return None
+
+        extension_by_type = {
+            "image/jpeg": ".jpg",
+            "image/jpg": ".jpg",
+            "image/png": ".png",
+            "image/webp": ".webp",
+            "image/gif": ".gif",
+        }
+        extension = extension_by_type.get(content_type)
+        if extension is None:
+            suffix = Path(urlparse(url).path).suffix.lower()
+            if suffix in {".jpg", ".jpeg", ".png", ".webp", ".gif"}:
+                extension = ".jpg" if suffix == ".jpeg" else suffix
+            else:
+                return None
+
+        destination_stem.parent.mkdir(parents=True, exist_ok=True)
+        destination = destination_stem.with_suffix(extension)
+        try:
+            destination.write_bytes(data)
+        except OSError:
+            return None
+        return destination
