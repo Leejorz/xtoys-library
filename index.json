@@ -2,6 +2,31 @@
   "author": "local",
   "videos": [
     {
+      "name": "Marie Rose - BOOM",
+      "site": "spankbang",
+      "id": "67cyo",
+      "scripts": [
+        {
+          "name": "Marie Rose - BOOM.funscript",
+          "location": "https://raw.githubusercontent.com/leejorz/xtoys-library/main/funscripts/Marie%20Rose%20-%20BOOM.funscript"
+        }
+      ],
+      "tags": [
+        "animation",
+        "cgi",
+        "HMV",
+        "non-vr"
+      ],
+      "created_at": "2026-08-19 14:47:09",
+      "url": "https://discuss.eroscripts.com/t/marie-rose-boom-hmv/59811",
+      "valid": true,
+      "creator": "SzFrs",
+      "ignore": false,
+      "last_checked": "2026-08-19T14:47:15.139017+00:00",
+      "thumbnail": "https://raw.githubusercontent.com/leejorz/xtoys-library/main/images/marie-rose-boom.jpeg",
+      "displayName": "Marie Rose - BOOM"
+    },
+    {
       "name": "AccelArt maka albar soul eater",
       "site": "rule34video",
       "id": "4491785",
@@ -22,7 +47,7 @@
       "valid": true,
       "creator": "gaemeu",
       "ignore": false,
-      "last_checked": "2026-08-19T14:44:05.011650+00:00",
+      "last_checked": "2026-08-19T14:47:15.138901+00:00",
       "thumbnail": "https://raw.githubusercontent.com/leejorz/xtoys-library/main/images/accelart-maka-albar-soul-eater.jpeg",
       "displayName": "AccelArt maka albar soul eater"
     }
@@ -30,10 +55,20 @@
   "version": 1,
   "tags": {
     "animation": [
-      "AccelArt maka albar soul eater"
+      "AccelArt maka albar soul eater",
+      "Marie Rose - BOOM"
+    ],
+    "cgi": [
+      "Marie Rose - BOOM"
     ],
     "hentai": [
       "AccelArt maka albar soul eater"
+    ],
+    "HMV": [
+      "Marie Rose - BOOM"
+    ],
+    "non-vr": [
+      "Marie Rose - BOOM"
     ],
     "stomach-bulge": [
       "AccelArt maka albar soul eater"
@@ -42,5 +77,5 @@
       "AccelArt maka albar soul eater"
     ]
   },
-  "hash": "14e3dd7c57b2b0bddc61bedb561081ebee7f11eb124eacbd63de8717b80a0f24"
+  "hash": "546184181980c6368b18e3ab88f5e91adb744082484f80ace281ff792bb1d36a"
 }
