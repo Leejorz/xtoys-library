@@ -262,42 +262,76 @@ class Application:
                     progress_callback(f"Could not download thumbnail for {script['filename']}")
         return migrated, failed
 
-    def _repair_rule34_thumbnail_urls(self, progress_callback=None) -> int:
-        """Undo repository-hosted Rule34 thumbnails from the prior patch.
+    def _prepare_reference_style_thumbnails(self, progress_callback=None) -> tuple[int, int]:
+        """Prepare repository-hosted JPEG thumbnails without changing source metadata.
 
-        Rule34Video entries were selectable before thumbnails were mirrored into
-        this repository.  Keep the real Rule34 site/id and restore the direct
-        preview URL, which is deterministically tied to the video ID.
+        The bundled reference index serves thumbnails from images/*.jpeg.  Keep
+        SQLite's thumbnail value as the real source URL so site/video matching
+        remains independent from presentation.  The IndexBuilder will use the
+        local .jpeg only when it exists.
         """
-        repaired = 0
-        for script in self.database.all_scripts():
-            thumbnail = (script["thumbnail"] or "").strip()
-            if "raw.githubusercontent.com" not in thumbnail.lower() or "/images/" not in thumbnail.lower():
-                continue
+        prepared = 0
+        failed = 0
+        images_dir = self.root / self.config.images_dir
+        images_dir.mkdir(parents=True, exist_ok=True)
 
+        for script in self.database.all_scripts():
             source = self.database.get_video_source(script["id"])
             if not source:
                 continue
 
             site = str(source["site"] or "").strip().lower()
-            if site not in {"rule34video", "rule34video.com", "www.rule34video.com"}:
-                continue
-
             video_id = str(source["video_id"] or "").strip()
-            if not video_id.isdigit():
+            thumbnail = str(script["thumbnail"] or "").strip()
+
+            # For Rule34Video, derive the preview from the exact video ID so a
+            # thumbnail can never be borrowed from another candidate/post.
+            if site in {"rule34video", "rule34video.com", "www.rule34video.com"} and video_id.isdigit():
+                bucket = (int(video_id) // 1000) * 1000
+                thumbnail = (
+                    f"https://rule34video.com/contents/videos_screenshots/"
+                    f"{bucket}/{video_id}/preview.jpg"
+                )
+
+            if not thumbnail.lower().startswith(("http://", "https://")):
                 continue
 
-            bucket = (int(video_id) // 1000) * 1000
-            direct_url = (
-                f"https://rule34video.com/contents/videos_screenshots/"
-                f"{bucket}/{video_id}/preview.jpg"
-            )
-            self.database.update_script_thumbnail(script["id"], direct_url)
-            repaired += 1
-            if progress_callback:
-                progress_callback(f"Restored direct Rule34Video thumbnail for {script['filename']}")
+            stem = images_dir / self._thumbnail_slug(script["filename"])
+            jpeg_path = stem.with_suffix(".jpeg")
 
-        return repaired
+            # Existing reference-style image is already ready.  Never reuse
+            # the old .jpg from the earlier experimental patch.
+            if jpeg_path.exists() and jpeg_path.stat().st_size > 0:
+                prepared += 1
+                continue
+
+            referer = (source["source_url"] or "").strip() or script["eroscripts_url"]
+            downloaded = ThumbnailExtractor.download_image(
+                thumbnail,
+                stem,
+                referer=referer,
+            )
+            if downloaded is None:
+                failed += 1
+                if progress_callback:
+                    progress_callback(f"Could not prepare thumbnail for {script['filename']}")
+                continue
+
+            try:
+                # Rule34 previews are JPEG data.  The reference index uses the
+                # .jpeg suffix consistently, so normalize the filename only.
+                if downloaded != jpeg_path:
+                    jpeg_path.write_bytes(downloaded.read_bytes())
+                    downloaded.unlink(missing_ok=True)
+                prepared += 1
+                if progress_callback:
+                    progress_callback(f"Prepared reference-style thumbnail for {script['filename']}")
+            except OSError:
+                failed += 1
+                if progress_callback:
+                    progress_callback(f"Could not save thumbnail for {script['filename']}")
+
+        return prepared, failed
 
     def build_index(self, progress_callback=None):
 
@@ -307,9 +341,11 @@ class Application:
 
         progress("Reading library records...")
 
-        repaired = self._repair_rule34_thumbnail_urls(progress_callback)
-        if repaired:
-            progress(f"Restored {repaired} Rule34Video thumbnail URL(s).")
+        prepared, failed = self._prepare_reference_style_thumbnails(progress_callback)
+        if prepared:
+            progress(f"Prepared {prepared} reference-style thumbnail(s).")
+        if failed:
+            progress(f"Warning: {failed} thumbnail(s) could not be prepared; source URLs will remain as fallback.")
 
         builder = IndexBuilder(
             self.root,
