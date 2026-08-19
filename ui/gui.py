@@ -773,7 +773,9 @@ class LibraryGUI:
                 "Library rebuilt successfully.",
                 f"Complete: {result['scripts_found']} scripts found; "
                 f"{result['new']} new, {result['renamed']} renamed, "
-                f"{result['unchanged']} unchanged.",
+                f"{result['unchanged']} unchanged, {result['removed']} removed. "
+                f"index.json regenerated with {result['index_count']} video(s). "
+                "Use GitHub Publish to update the xToys Generic Funscript Player.",
             )
         except Exception as error:
             self.set_status("Library rebuild failed", f"ERROR: {error}")
@@ -1579,7 +1581,17 @@ class LibraryGUI:
                 self.application.build_index()
                 load_scripts()
                 self.refresh_count()
-                self.set_status(f"Deleted {title}.")
+                self.set_status(
+                    f"Deleted {title} locally. index.json was regenerated; "
+                    "use GitHub Publish to remove it from the xToys Generic Funscript Player."
+                )
+                messagebox.showinfo(
+                    "Funscript Deleted",
+                    f"{title} was removed locally and index.json was rebuilt.\n\n"
+                    "To remove it from the xToys Generic Funscript Player, run GitHub Publish so "
+                    "the updated index.json, index-hash.sha, and funscript deletion reach GitHub.",
+                    parent=window,
+                )
             except Exception as error:
                 messagebox.showerror(
                     "Delete Funscript Failed",

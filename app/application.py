@@ -142,6 +142,12 @@ class Application:
             f"{unchanged_count} unchanged, {removed_count} removed."
         )
 
+        # Rebuild Library is the authoritative synchronization operation.
+        # Keep the generated xToys index in lock-step with SQLite so removed
+        # scripts cannot remain in a stale local index.json/index-hash.sha.
+        progress("Regenerating index.json and index-hash.sha...")
+        index_result = self.build_index(progress_callback=progress_callback)
+
         print(
             "\nLibrary rebuilt successfully.\n"
         )
@@ -172,6 +178,8 @@ class Application:
             "renamed": rename_count,
             "unchanged": unchanged_count,
             "removed": removed_count,
+            "index_path": index_result["path"],
+            "index_count": index_result["count"],
         }
 
     def build_index(self, progress_callback=None):
