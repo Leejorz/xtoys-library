@@ -87,31 +87,6 @@ class IndexBuilder:
 
         return output_path, len(videos)
 
-    @staticmethod
-    def _thumbnail_slug(filename: str) -> str:
-        import re
-        stem = Path(filename or "thumbnail").stem.lower()
-        stem = re.sub(r"[^a-z0-9]+", "-", stem).strip("-")
-        return stem or "thumbnail"
-
-    def build_thumbnail_url(self, script) -> str:
-        """Match the bundled reference index without altering SQLite metadata."""
-        images_dir = self.root / self.config.images_dir
-        image_path = images_dir / f"{self._thumbnail_slug(script['filename'])}.jpeg"
-
-        if image_path.exists() and image_path.stat().st_size > 0:
-            owner = str(getattr(self.config, "github_owner", "") or "").strip()
-            repo = str(getattr(self.config, "github_repo", "") or "").strip()
-            branch = str(getattr(self.config, "github_branch", "main") or "main").strip()
-            if owner and repo:
-                rel = image_path.relative_to(self.root).as_posix()
-                return (
-                    f"https://raw.githubusercontent.com/{quote(owner, safe='')}/"
-                    f"{quote(repo, safe='')}/{quote(branch, safe='/')}/{quote(rel, safe='/')}"
-                )
-
-        return script["thumbnail"] or ""
-
     def build_video(self, script):
 
         script_id = script["id"]
@@ -191,7 +166,10 @@ class IndexBuilder:
 
             "last_checked": now,
 
-            "thumbnail": self.build_thumbnail_url(script),
+            "thumbnail": (
+                script["thumbnail"]
+                or ""
+            ),
 
             "displayName": display_name
         }
