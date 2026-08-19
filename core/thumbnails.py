@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import base64
 import html
 import json
 import re
+from io import BytesIO
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlparse
 from urllib.request import Request, urlopen
+
+from PIL import Image
 
 
 class ThumbnailExtractor:
@@ -177,11 +181,17 @@ class ThumbnailExtractor:
         referer: str | None = None,
         timeout: float = 15.0,
     ) -> Path | None:
-        """Download a detected thumbnail into the repository images folder.
+        """Download and normalize a thumbnail in the original xToys format.
 
-        xToys library thumbnails are most reliable when served from the same
-        GitHub repository as index.json.  Some video hosts block third-party
-        hotlinking even though their preview URL works in the source page.
+        The xsqueezeme library's ``images/*.jpeg`` files are intentionally text
+        files containing a ``data:image/jpeg;base64,...`` URL.  The Generic
+        Funscript Player fetches those files with ``getXhr()`` and passes the
+        returned text directly to ``canvas.drawImage()``.
+
+        Therefore we must *not* write raw binary JPEG bytes here.  Decode the
+        remote image, normalize it to RGB JPEG, resize it to the same 256px
+        maximum used by the original project, then save the base64 data URL as
+        UTF-8 text in a ``.jpeg`` file.
         """
         if not image_url:
             return None
@@ -200,7 +210,12 @@ class ThumbnailExtractor:
         try:
             request = Request(url, headers=headers)
             with urlopen(request, timeout=timeout) as response:
-                content_type = (response.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+                content_type = (
+                    (response.headers.get("Content-Type") or "")
+                    .split(";", 1)[0]
+                    .strip()
+                    .lower()
+                )
                 data = response.read(10_000_001)
         except (HTTPError, URLError, TimeoutError, OSError):
             return None
@@ -208,25 +223,45 @@ class ThumbnailExtractor:
         if not data or len(data) > 10_000_000:
             return None
 
-        extension_by_type = {
-            "image/jpeg": ".jpg",
-            "image/jpg": ".jpg",
-            "image/png": ".png",
-            "image/webp": ".webp",
-            "image/gif": ".gif",
-        }
-        extension = extension_by_type.get(content_type)
-        if extension is None:
-            suffix = Path(urlparse(url).path).suffix.lower()
-            if suffix in {".jpg", ".jpeg", ".png", ".webp", ".gif"}:
-                extension = ".jpg" if suffix == ".jpeg" else suffix
-            else:
-                return None
+        # Reject obvious non-image responses before Pillow sees them.
+        if content_type and not content_type.startswith("image/"):
+            return None
+
+        try:
+            with Image.open(BytesIO(data)) as source:
+                source.load()
+
+                # Animated images use the first frame, matching thumbnail use.
+                try:
+                    source.seek(0)
+                except Exception:
+                    pass
+
+                image = source.convert("RGB")
+                image.thumbnail((256, 256), Image.Resampling.LANCZOS)
+
+                buffer = BytesIO()
+                image.save(buffer, format="JPEG", quality=85, optimize=True)
+                jpeg_bytes = buffer.getvalue()
+
+            # Verify that the normalized output is itself a readable JPEG.
+            with Image.open(BytesIO(jpeg_bytes)) as verify:
+                verify.verify()
+
+        except Exception:
+            return None
+
+        data_url = (
+            "data:image/jpeg;base64,"
+            + base64.b64encode(jpeg_bytes).decode("ascii")
+        )
 
         destination_stem.parent.mkdir(parents=True, exist_ok=True)
-        destination = destination_stem.with_suffix(extension)
+        destination = destination_stem.with_suffix(".jpeg")
+
         try:
-            destination.write_bytes(data)
+            destination.write_text(data_url, encoding="utf-8")
         except OSError:
             return None
+
         return destination

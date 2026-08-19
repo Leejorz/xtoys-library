@@ -214,7 +214,7 @@ class Application:
         thumbnail_url: str | None,
         referer: str | None = None,
     ) -> str | None:
-        """Cache an external thumbnail in images/ and store its GitHub URL."""
+        """Cache an external thumbnail using the original xToys data-URL image format."""
         if not thumbnail_url:
             return None
 
@@ -238,7 +238,7 @@ class Application:
         return public_url
 
     def _localize_external_thumbnails(self, progress_callback=None) -> tuple[int, int]:
-        """Migrate hotlinked thumbnails to repository-hosted images."""
+        """Migrate hotlinked thumbnails to original-format repository image files."""
         migrated = 0
         failed = 0
         for script in self.database.all_scripts():
@@ -262,43 +262,6 @@ class Application:
                     progress_callback(f"Could not download thumbnail for {script['filename']}")
         return migrated, failed
 
-    def _repair_rule34_thumbnail_urls(self, progress_callback=None) -> int:
-        """Undo repository-hosted Rule34 thumbnails from the prior patch.
-
-        Rule34Video entries were selectable before thumbnails were mirrored into
-        this repository.  Keep the real Rule34 site/id and restore the direct
-        preview URL, which is deterministically tied to the video ID.
-        """
-        repaired = 0
-        for script in self.database.all_scripts():
-            thumbnail = (script["thumbnail"] or "").strip()
-            if "raw.githubusercontent.com" not in thumbnail.lower() or "/images/" not in thumbnail.lower():
-                continue
-
-            source = self.database.get_video_source(script["id"])
-            if not source:
-                continue
-
-            site = str(source["site"] or "").strip().lower()
-            if site not in {"rule34video", "rule34video.com", "www.rule34video.com"}:
-                continue
-
-            video_id = str(source["video_id"] or "").strip()
-            if not video_id.isdigit():
-                continue
-
-            bucket = (int(video_id) // 1000) * 1000
-            direct_url = (
-                f"https://rule34video.com/contents/videos_screenshots/"
-                f"{bucket}/{video_id}/preview.jpg"
-            )
-            self.database.update_script_thumbnail(script["id"], direct_url)
-            repaired += 1
-            if progress_callback:
-                progress_callback(f"Restored direct Rule34Video thumbnail for {script['filename']}")
-
-        return repaired
-
     def build_index(self, progress_callback=None):
 
         def progress(message):
@@ -307,9 +270,15 @@ class Application:
 
         progress("Reading library records...")
 
-        repaired = self._repair_rule34_thumbnail_urls(progress_callback)
-        if repaired:
-            progress(f"Restored {repaired} Rule34Video thumbnail URL(s).")
+        migrated, failed = self._localize_external_thumbnails(progress_callback)
+        if migrated:
+            progress(
+                f"Prepared {migrated} repository thumbnail(s) in the original xToys data-URL format."
+            )
+        if failed:
+            progress(
+                f"Warning: {failed} thumbnail(s) could not be normalized; existing source URLs were kept."
+            )
 
         builder = IndexBuilder(
             self.root,
@@ -448,7 +417,7 @@ class Application:
                     source = self.database.get_video_source(script["id"])
                     if source is not None:
                         expected.add((
-                            source["site"] or "",
+                            IndexBuilder.normalize_site(source["site"] or ""),
                             source["video_id"] or ""
                         ))
 
@@ -1392,9 +1361,9 @@ class Application:
         if not thumbnail:
             thumbnail = getattr(result, "thumbnail_url", None)
         if thumbnail:
-            # Keep the source thumbnail URL directly.  Do not mirror thumbnails
-            # into this repository: that regression changed otherwise-working
-            # Rule34Video entries in the xToys player.
+            # Keep the detected source URL in SQLite first.  ``build_index()``
+            # converts it into the original xsqueezeme repository-thumbnail
+            # format (a text data URL stored in images/*.jpeg) before publishing.
             self.database.update_script_thumbnail(script_id, thumbnail)
 
         if result.video_site:

@@ -20,7 +20,7 @@ echo Python: %PYTHON%
 echo.
 echo [1/5] Installing build dependencies...
 %PYTHON% -m pip install --upgrade pip || goto :failed
-%PYTHON% -m pip install pyinstaller playwright || goto :failed
+%PYTHON% -m pip install pyinstaller playwright pillow || goto :failed
 
 echo.
 echo [2/5] Installing Playwright Chromium...
