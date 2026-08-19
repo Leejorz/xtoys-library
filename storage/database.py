@@ -222,7 +222,6 @@ class Database:
             VALUES (
                 ?,
                 ?,
-                ?,
                 datetime('now'),
                 datetime('now')
             )

@@ -625,7 +625,7 @@ class LibraryGUI:
                     f"Video ID: {result.video_id or '—'}\n"
                     f"Source URL: {result.video_url or '—'}\n"
                     f"Tags: {', '.join(result.tags) if result.tags else '—'}\n"
-                    f"Thumbnail: {getattr(result, 'thumbnail', None) or '—'}\n\n",
+                    f"Thumbnail: {getattr(result, 'thumbnail_url', None) or '—'}\n\n",
                 )
             save_text.config(state="disabled")
             rebuild_import_tag_selector(results_holder["value"])

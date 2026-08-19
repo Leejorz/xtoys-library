@@ -1230,7 +1230,7 @@ class Application:
                     display_name=result.title,
                     creator=result.creator,
                     eroscripts_url=requested_url,
-                    thumbnail=getattr(result, "thumbnail", None)
+                    thumbnail=getattr(result, "thumbnail_url", None)
                 )
             )
 
@@ -1245,7 +1245,7 @@ class Application:
                 display_name=result.title,
                 creator=result.creator,
                 eroscripts_url=requested_url,
-                thumbnail=getattr(result, "thumbnail", None)
+                thumbnail=getattr(result, "thumbnail_url", None)
             )
 
         self.database.replace_script_tags(
