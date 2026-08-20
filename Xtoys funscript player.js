@@ -3330,10 +3330,12 @@ function restartVideo() {
 
 function isExternalVideoSite(site) {
     var value = (site || "").toLowerCase();
+    // These hosts are not supported by XToys as native tease-video sites.
+    // Rule34Video is intentionally NOT included here: XToys has a native
+    // rule34video handler, so it must continue through the normal load path.
     return value == "pixeldrain" || value == "pixeldrain.com" ||
         value == "hmvmania" || value == "hmvmania.com" ||
-        value == "pmvhaven" || value == "pmvhaven.com" ||
-        value == "rule34video" || value == "rule34video.com";
+        value == "pmvhaven" || value == "pmvhaven.com";
 }
 
 function loadVideo() {
@@ -3341,13 +3343,12 @@ function loadVideo() {
     console.log("Loading video: " + JSON.stringify(video));
 
     if (video && isExternalVideoSite(video.site)) {
-        console.log("External/manual video source detected: " + video.site + " / " + video.id);
-        var source = video.sourceUrl || video.url || "";
-        var message = "This host cannot be embedded by the xToys tease video action. Open the source separately, start it at 0:00, then press Start manually.";
-        if (source) {
-            message += " Source: " + source;
-        }
-        statusText(message);
+        console.log("External video source detected: " + video.site + " / " + video.id);
+        // XToys custom JS has no DOM access and its tease Video action does not
+        // expose arbitrary remote MP4/HLS playback. Keep the script idle until
+        // the user starts the external video and presses Start manually.
+        var sourceHint = video.sourceUrl ? (" Source: " + video.sourceUrl) : "";
+        statusText("External video: open it separately, then press Start manually." + sourceHint);
         return;
     }
 

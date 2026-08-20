@@ -1231,20 +1231,6 @@ class EroScriptsImporter:
             return None
 
     @staticmethod
-    def _is_supported_video_page_url(host: str, path: str) -> bool:
-        """Reject profile/navigation/media links that are not actual video pages."""
-        host = (host or "").lower().removeprefix("www.")
-        path = (path or "/").lower()
-
-        if host == "rule34video.com":
-            return re.match(r"^/video/\d+(?:/|$)", path) is not None
-        if host in {"pmvhaven.com", "hmvmania.com"}:
-            return path.startswith("/video/")
-        if is_pixeldrain_host(host):
-            return re.match(r"^/(?:u|l)/[^/]+", path) is not None
-        return True
-
-    @staticmethod
     def extract_video_for_script(page, script_url: str, filename: str) -> dict | None:
         """Find the nearest supported video link preceding a script in its Discourse post."""
         try:
@@ -1301,8 +1287,6 @@ class EroScriptsImporter:
                     continue
                 if path_lower.endswith(image_exts):
                     continue
-                if not EroScriptsImporter._is_supported_video_page_url(host, parsed.path or "/"):
-                    continue
 
                 text = " ".join((raw.get("text") or "").split()) or None
                 if is_pixeldrain_host(host):
@@ -1316,6 +1300,10 @@ class EroScriptsImporter:
                     }
 
                 if host in supported_hosts or host.endswith(".noodledude.io"):
+                    # Rule34Video has many non-video pages (members, tags, etc.).
+                    # Only accept its canonical numeric /video/<id>/ form.
+                    if host == "rule34video.com" and not re.search(r"^/video/\d+(?:/|$)", parsed.path or "", re.I):
+                        continue
                     return {
                         "site": host,
                         "title": text,
@@ -1353,8 +1341,6 @@ class EroScriptsImporter:
                     host = (parsed.hostname or "").lower().removeprefix("www.")
                     if not host or host in {"discuss.eroscripts.com", "eroscripts.com"}:
                         continue
-                    if not EroScriptsImporter._is_supported_video_page_url(host, parsed.path or "/"):
-                        continue
                     text = " ".join((link.inner_text(timeout=2000) or "").split()) or None
                     if is_pixeldrain_host(host):
                         resolved = resolve_pixeldrain_url(full_url) or {}
@@ -1365,6 +1351,8 @@ class EroScriptsImporter:
                             "video_id": resolved.get("video_id"),
                         }
                     else:
+                        if host == "rule34video.com" and not re.search(r"^/video/\d+(?:/|$)", parsed.path or "", re.I):
+                            continue
                         item = {"site": host, "title": text, "url": full_url}
                     if item not in candidates:
                         candidates.append(item)
