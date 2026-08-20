@@ -980,6 +980,44 @@ class Application:
             source_url=source_url
         )
 
+    def discover_eroscripts(self, url: str):
+        """Discover EroScripts funscripts without downloading them."""
+        auth = EroScriptsAuth(self.root)
+        try:
+            auth.start()
+            if auth.context is None:
+                raise RuntimeError("Could not start the EroScripts browser session.")
+            importer = EroScriptsImporter(auth.context, self.root)
+            return importer.discover_from_url(url)
+        finally:
+            auth.close()
+
+    def import_selected_eroscripts(
+        self,
+        url: str,
+        selected,
+        persist: bool = False,
+    ):
+        """Download only the EroScripts attachments selected in the GUI."""
+        auth = EroScriptsAuth(self.root)
+        try:
+            auth.start()
+            if auth.context is None:
+                raise RuntimeError("Could not start the EroScripts browser session.")
+            importer = EroScriptsImporter(auth.context, self.root)
+            destination = self.root / self.config.funscripts_dir
+            results = importer.import_selected_from_url(
+                url, destination, selected, write_files=persist
+            )
+            if persist:
+                requested_url = self.normalize_url(url)
+                for result in results:
+                    self.assign_video_source(result, preferred_url=None, interactive=False)
+                    self.save_eroscripts_import(result, requested_url)
+            return results
+        finally:
+            auth.close()
+
     def import_eroscripts(
         self,
         url: str,
@@ -1309,6 +1347,13 @@ class Application:
         requested_url = self.normalize_url(
             requested_url
         )
+
+        # GUI imports now keep selected downloads in memory until the user
+        # confirms Save. Write the funscript exactly once at that point.
+        destination = self.root / self.config.funscripts_dir
+        destination.mkdir(parents=True, exist_ok=True)
+        output_path = destination / result.filename
+        output_path.write_bytes(result.content)
 
         content_hash = result.content_hash
 

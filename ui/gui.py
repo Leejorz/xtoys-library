@@ -169,6 +169,8 @@ class LibraryGUI:
         eroscripts_url_holder = {"value": ""}
         selected_import_tags_holder = {"value": []}
         fallback_vars = {}
+        discovered_holder = {"value": []}
+        discovery_vars = []
 
         def show_page(name):
             for frame in pages.values():
@@ -218,12 +220,40 @@ class LibraryGUI:
         ttk.Label(page2, text="Download & Detect", font=("TkDefaultFont", 16, "bold")).pack(anchor="w", pady=(0, 8))
         ttk.Label(
             page2,
-            text="The funscript is downloaded first. The app then automatically checks the EroScripts page for the video site and video ID.",
+            text=("The app first detects available funscripts without downloading them. "
+                  "Choose the ones you want, then download only those selections and detect their video sources."),
             wraplength=640,
         ).pack(anchor="w", pady=(0, 14))
 
         detection_status = tk.StringVar(value="Starting import...")
         ttk.Label(page2, textvariable=detection_status, wraplength=640).pack(anchor="w", pady=(0, 12))
+
+        selection_frame = ttk.LabelFrame(page2, text="Available funscripts", padding=10)
+        selection_frame.pack(fill="both", expand=True, pady=(0, 14))
+
+        select_all_var = tk.BooleanVar(value=True)
+        select_all_check = ttk.Checkbutton(
+            selection_frame, text="Select All", variable=select_all_var
+        )
+        select_all_check.pack(anchor="w", pady=(0, 6))
+
+        selection_container = ttk.Frame(selection_frame)
+        selection_container.pack(fill="both", expand=True)
+        selection_canvas = tk.Canvas(selection_container, highlightthickness=0, borderwidth=0)
+        selection_scroll = ttk.Scrollbar(selection_container, orient="vertical", command=selection_canvas.yview)
+        selection_list_frame = ttk.Frame(selection_canvas)
+        selection_window = selection_canvas.create_window((0, 0), window=selection_list_frame, anchor="nw")
+        selection_list_frame.bind(
+            "<Configure>",
+            lambda _e: selection_canvas.configure(scrollregion=selection_canvas.bbox("all")),
+        )
+        selection_canvas.bind(
+            "<Configure>",
+            lambda e: selection_canvas.itemconfigure(selection_window, width=e.width),
+        )
+        selection_canvas.configure(yscrollcommand=selection_scroll.set)
+        selection_canvas.pack(side="left", fill="both", expand=True)
+        selection_scroll.pack(side="right", fill="y")
 
         detection_frame = ttk.LabelFrame(page2, text="Automatic detection", padding=10)
         detection_frame.pack(fill="both", expand=True, pady=(0, 14))
@@ -243,13 +273,37 @@ class LibraryGUI:
             detection_tree.heading(column, text=heading)
             detection_tree.column(column, width=width, anchor="w")
         detection_tree.pack(fill="both", expand=True)
+        detection_frame.pack_forget()
+
+        def set_all_discovered():
+            value = bool(select_all_var.get())
+            for _candidate, var in discovery_vars:
+                var.set(value)
+            update_selection_count()
+
+        def update_select_all_state(*_args):
+            if not discovery_vars:
+                select_all_var.set(False)
+                return
+            values = [bool(var.get()) for _candidate, var in discovery_vars]
+            select_all_var.set(all(values))
+            update_selection_count()
+
+        def update_selection_count():
+            selected_count = sum(1 for _candidate, var in discovery_vars if var.get())
+            total = len(discovery_vars)
+            page2_status.set(f"Selected {selected_count} of {total} funscript(s) for download.")
+
+        select_all_check.config(command=set_all_discovered)
 
         page2_status = tk.StringVar(value="")
         ttk.Label(page2, textvariable=page2_status).pack(anchor="w", pady=(0, 10))
         page2_buttons = ttk.Frame(page2)
         page2_buttons.pack(fill="x", side="bottom")
+        download_selected_button = ttk.Button(page2_buttons, text="Download Selected", state="disabled")
+        download_selected_button.pack(side="left")
         detect_next_button = ttk.Button(page2_buttons, text="Continue", state="disabled")
-        detect_next_button.pack(side="left")
+        detect_next_button.pack(side="left", padx=(8, 0))
         ttk.Button(page2_buttons, text="Cancel", command=window.destroy).pack(side="right")
 
         # ------------------------------------------------------------
@@ -512,7 +566,74 @@ class LibraryGUI:
 
         tag_continue_button.config(command=apply_selected_import_tags)
 
+        def populate_discovery_page(candidates):
+            discovered_holder["value"] = list(candidates or [])
+            discovery_vars.clear()
+            for child in selection_list_frame.winfo_children():
+                child.destroy()
+
+            for candidate in discovered_holder["value"]:
+                var = tk.BooleanVar(value=True)
+                discovery_vars.append((candidate, var))
+                row = ttk.Checkbutton(
+                    selection_list_frame,
+                    text=candidate.get("filename", "Unnamed funscript"),
+                    variable=var,
+                    command=update_select_all_state,
+                )
+                row.pack(anchor="w", fill="x", pady=2)
+
+            select_all_var.set(bool(discovery_vars))
+            selection_frame.pack(fill="both", expand=True, pady=(0, 14))
+            detection_frame.pack_forget()
+            detection_status.set(
+                f"Found {len(discovery_vars)} funscript(s). Choose which ones to download."
+            )
+            update_selection_count()
+            download_selected_button.config(state="normal")
+            detect_next_button.config(state="disabled")
+
+        def selected_discovery_items():
+            return [candidate for candidate, var in discovery_vars if var.get()]
+
+        def start_selected_download():
+            selected = selected_discovery_items()
+            if not selected:
+                messagebox.showwarning(
+                    "No Funscripts Selected",
+                    "Select at least one funscript to download.",
+                    parent=window,
+                )
+                return
+
+            download_selected_button.config(state="disabled")
+            select_all_check.config(state="disabled")
+            for child in selection_list_frame.winfo_children():
+                try:
+                    child.config(state="disabled")
+                except Exception:
+                    pass
+            detection_status.set(f"Downloading {len(selected)} selected funscript(s)...")
+            page2_status.set("Only the selected files are being downloaded. Nothing is saved to the library yet.")
+
+            def worker():
+                try:
+                    results = self.application.import_selected_eroscripts(
+                        eroscripts_url_holder["value"], selected, persist=False
+                    )
+                    for result in results:
+                        self.application.prepare_video_source(result)
+                    self.root.after(0, lambda results=results: import_finished(results))
+                except Exception as error:
+                    self.root.after(0, lambda error=error: import_failed(error))
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        download_selected_button.config(command=start_selected_download)
+
         def populate_detection_page(results):
+            selection_frame.pack_forget()
+            detection_frame.pack(fill="both", expand=True, pady=(0, 14))
             for item in detection_tree.get_children():
                 detection_tree.delete(item)
 
@@ -679,24 +800,19 @@ class LibraryGUI:
                 return
 
             eroscripts_url_holder["value"] = url
-            page1_status.set("Starting...")
+            page1_status.set("Starting discovery...")
             show_page("detect")
-            detection_status.set("Downloading funscript(s) from EroScripts...")
-            page2_status.set("The browser/importer is working. Please wait.")
+            selection_frame.pack(fill="both", expand=True, pady=(0, 14))
+            detection_frame.pack_forget()
+            detection_status.set("Detecting available funscripts. No files are being downloaded yet...")
+            page2_status.set("Scanning the EroScripts page and expanded dropdown sections.")
+            download_selected_button.config(state="disabled")
             detect_next_button.config(state="disabled")
 
             def worker():
                 try:
-                    results = self.application.import_eroscripts(
-                        url,
-                        video_source_url=None,
-                        interactive=False,
-                        persist=False,
-                    )
-                    # Source detection here is memory-only. No SQLite access.
-                    for result in results:
-                        self.application.prepare_video_source(result)
-                    self.root.after(0, lambda results=results: import_finished(results))
+                    candidates = self.application.discover_eroscripts(url)
+                    self.root.after(0, lambda candidates=candidates: populate_discovery_page(candidates))
                 except Exception as error:
                     self.root.after(0, lambda error=error: import_failed(error))
 

@@ -142,6 +142,166 @@ class EroScriptsImporter:
         report_path.write_text("\n".join(lines), encoding="utf-8")
         return report_path
 
+    def discover_from_url(self, url: str) -> list[dict]:
+        """Discover funscript attachments without downloading or writing files."""
+        print("\n[IMPORT] Cleaning EroScripts URL...")
+        url = self.clean_url(url)
+        print(f"[IMPORT] URL: {url}")
+        if not url:
+            raise ValueError("EroScripts URL cannot be empty.")
+
+        page = self.context.new_page()
+        try:
+            print("[IMPORT] Opening browser page for discovery...")
+            response = page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            if response is None:
+                raise RuntimeError("EroScripts did not return a page response.")
+            print(f"[IMPORT] HTTP status: {response.status}")
+            if response.status >= 400:
+                raise RuntimeError(f"EroScripts returned HTTP {response.status}.")
+            if "/login" in page.url.lower():
+                raise RuntimeError("The EroScripts session has expired. Please log in again through Settings -> EroScripts Login.")
+
+            candidates = self.find_script_links(page, url)
+            if not candidates:
+                raise RuntimeError("Could not find a .funscript download link on the EroScripts page.")
+
+            print(f"[IMPORT] Discovery complete: {len(candidates)} funscript candidate(s). No files downloaded.")
+            return [
+                {"filename": filename, "script_url": script_url, "index": index}
+                for index, (script_url, filename) in enumerate(candidates)
+            ]
+        finally:
+            try:
+                page.close()
+            except Exception:
+                pass
+
+    @staticmethod
+    def _select_current_candidates(
+        candidates: list[tuple[str, str]],
+        selected: list[dict] | list[str]
+    ) -> list[tuple[str, str]]:
+        """Map discovery selections onto a freshly loaded page.
+
+        Blob URLs are page-scoped and can change between discovery and download,
+        so selection is matched by filename/occurrence rather than stale blob URL.
+        """
+        wanted = []
+        for item in selected or []:
+            if isinstance(item, dict):
+                wanted.append(str(item.get("filename") or ""))
+            else:
+                wanted.append(str(item))
+
+        remaining = list(candidates)
+        chosen = []
+        for filename in wanted:
+            match_index = None
+            for i, candidate in enumerate(remaining):
+                if candidate[1] == filename:
+                    match_index = i
+                    break
+            if match_index is not None:
+                chosen.append(remaining.pop(match_index))
+        return chosen
+
+    def import_selected_from_url(
+        self,
+        url: str,
+        destination: Path,
+        selected: list[dict] | list[str],
+        write_files: bool = False,
+    ) -> list[EroScriptsImportResult]:
+        """Download only user-selected funscripts from an EroScripts page."""
+        print("\n[IMPORT] Cleaning EroScripts URL...")
+        url = self.clean_url(url)
+        if not url:
+            raise ValueError("EroScripts URL cannot be empty.")
+        if not selected:
+            return []
+
+        page = self.context.new_page()
+        try:
+            print("[IMPORT] Opening browser page for selected downloads...")
+            response = page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            if response is None:
+                raise RuntimeError("EroScripts did not return a page response.")
+            if response.status >= 400:
+                raise RuntimeError(f"EroScripts returned HTTP {response.status}.")
+            if "/login" in page.url.lower():
+                raise RuntimeError("The EroScripts session has expired. Please log in again through Settings -> EroScripts Login.")
+
+            current_candidates = self.find_script_links(page, url)
+            candidates = self._select_current_candidates(current_candidates, selected)
+            if not candidates:
+                raise RuntimeError("None of the selected funscripts could be found after reopening the EroScripts page.")
+
+            title = self.extract_topic_title(page)
+            metadata = self.extract_metadata(page, title)
+            video_candidates = self.extract_video_candidates(page)
+            diagnostic_path = self._write_diagnostic_report(page, url, candidates, video_candidates)
+            print(f"[IMPORT] Diagnostic report: {diagnostic_path.resolve()}")
+
+            if write_files:
+                destination.mkdir(parents=True, exist_ok=True)
+
+            results = []
+            failures = []
+            for number, (script_url, filename) in enumerate(candidates, start=1):
+                print(f"\n[IMPORT] Downloading selected script {number}/{len(candidates)}: {filename}")
+                try:
+                    content = self.download_script(page, script_url)
+                except Exception as exc:
+                    failures.append(f"{filename}: {exc}")
+                    print(f"[IMPORT] Skipping failed script: {filename}: {exc}")
+                    continue
+
+                if write_files:
+                    output_path = destination / filename
+                    output_path.write_bytes(content)
+                    print(f"[IMPORT] Saved: {output_path}")
+
+                content_hash = hashlib.sha256(content).hexdigest()
+                matched_video = self.extract_video_for_script(page, script_url, filename)
+                result_candidates = [matched_video] if matched_video else []
+                if matched_video:
+                    matched_video = dict(matched_video)
+                    detected_id = self._extract_video_id_from_url(matched_video.get("url"))
+                    if detected_id:
+                        matched_video["video_id"] = detected_id
+                    result_video_site = matched_video.get("site")
+                    result_video_url = matched_video.get("url")
+                    result_video_title = matched_video.get("title")
+                else:
+                    result_video_site = result_video_url = result_video_title = None
+
+                results.append(EroScriptsImportResult(
+                    page_url=url, script_url=script_url, filename=filename,
+                    content=content, title=title, creator=metadata["creator"],
+                    tags=metadata["tags"], video_site=result_video_site,
+                    video_url=result_video_url, video_title=result_video_title,
+                    video_id=(matched_video or {}).get("video_id"),
+                    video_candidates=result_candidates,
+                    thumbnail_url=self.extract_eroscripts_thumbnail(page, script_url),
+                    duration=metadata["duration"], action_count=metadata["action_count"],
+                    average_speed=metadata["average_speed"], content_hash=content_hash
+                ))
+
+            if failures and not results:
+                raise RuntimeError("All selected funscripts failed to download:\n" + "\n".join(failures))
+            if failures:
+                print("[IMPORT] Some selected scripts failed and were skipped:")
+                for failure in failures:
+                    print(f"[IMPORT]   {failure}")
+            return results
+        finally:
+            print("[IMPORT] Closing browser page...")
+            try:
+                page.close()
+            except Exception:
+                pass
+
     def import_all_from_url(
         self,
         url: str,
@@ -525,142 +685,251 @@ class EroScriptsImporter:
 
         return "Untitled Script"
 
+
+    @staticmethod
+    def _expand_collapsed_script_sections(page) -> int:
+        """Open collapsed Discourse <details> blocks before scanning attachments.
+
+        Hidden <details> content is normally present in the DOM, but opening the
+        blocks makes extraction reliable across Discourse/theme variations that
+        defer or rewrite attachment markup until the section is expanded.
+        """
+        expanded = 0
+        try:
+            expanded = page.locator("details:not([open])").count()
+            if expanded:
+                page.locator("details:not([open])").evaluate_all(
+                    "els => els.forEach(el => { el.open = true; el.setAttribute('open', ''); })"
+                )
+                page.wait_for_timeout(150)
+        except Exception:
+            pass
+        return expanded
+
+
+    @staticmethod
+    def _hydrate_full_topic(page) -> None:
+        """Scroll through the whole Discourse topic so lazy attachment widgets hydrate.
+
+        Long EroScripts topics can defer creating attachment/blob anchors until their
+        post region has entered the viewport. Walk the page from top to bottom, pausing
+        briefly between viewport-sized jumps, then return to the top before scanning.
+        """
+        try:
+            page.evaluate("window.scrollTo(0, 0)")
+            page.wait_for_timeout(100)
+            page.evaluate("""async () => {
+                const step = Math.max(400, Math.floor(window.innerHeight * 0.8));
+                let lastHeight = 0;
+                let stablePasses = 0;
+                for (let guard = 0; guard < 250; guard++) {
+                    const height = Math.max(
+                        document.body ? document.body.scrollHeight : 0,
+                        document.documentElement ? document.documentElement.scrollHeight : 0
+                    );
+                    if (height === lastHeight) stablePasses++; else stablePasses = 0;
+                    lastHeight = height;
+                    const maxY = Math.max(0, height - window.innerHeight);
+                    const nextY = Math.min(maxY, window.scrollY + step);
+                    window.scrollTo(0, nextY);
+                    await new Promise(resolve => setTimeout(resolve, 120));
+                    if (nextY >= maxY && stablePasses >= 2) break;
+                }
+                window.scrollTo(0, 0);
+            }""")
+            page.wait_for_timeout(200)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _looks_generated_script_filename(filename: str) -> bool:
+        """Reject obvious Discourse/browser-generated attachment tokens.
+
+        Some blob-backed attachments expose an internal random identifier in the
+        download attribute (for example a 25+ character alphanumeric token with
+        ``.funscript`` appended). Those are not filenames shown by the post and
+        should never be offered to the user as separate scripts.
+        """
+        stem = re.sub(r"\.funscript$", "", filename or "", flags=re.IGNORECASE)
+        return bool(
+            len(stem) >= 20
+            and re.fullmatch(r"[A-Za-z0-9]+", stem)
+            and any(ch.islower() for ch in stem)
+            and any(ch.isupper() for ch in stem)
+            and any(ch.isdigit() for ch in stem)
+        )
+
+    @staticmethod
+    def _script_link_filename(href: str | None, text: str | None,
+                              download: str | None = None,
+                              title: str | None = None) -> str | None:
+        """Return a trustworthy .funscript filename advertised by an anchor.
+
+        For normal Discourse upload links, the download attribute can contain the
+        original filename. For browser ``blob:`` links, however, that attribute
+        may instead contain a generated internal token. Blob attachments therefore
+        prefer only human-facing text/title metadata and ignore generated names.
+        """
+        is_blob = str(href or "").lower().startswith("blob:")
+        values = [text, title] if is_blob else [text, download, title, href]
+        for value in values:
+            if not value:
+                continue
+            match = re.search(r"([^\\/\r\n<>:\"|?*]+?\.funscript)(?:\b|$|[?#])",
+                              str(value), flags=re.IGNORECASE)
+            if match:
+                cleaned = EroScriptsImporter.clean_filename(match.group(1))
+                if cleaned and not EroScriptsImporter._looks_generated_script_filename(cleaned):
+                    return cleaned
+        return None
+
+    @staticmethod
+    def _find_script_anchor(page, script_url: str, filename: str):
+        """Find an attachment anchor by resolved URL or advertised filename."""
+        try:
+            links = page.locator("a[href]")
+            wanted = (filename or "").strip().lower()
+            for i in range(links.count()):
+                link = links.nth(i)
+                try:
+                    href = link.get_attribute("href") or ""
+                    full_url = urljoin(page.url, href)
+                    if full_url == script_url:
+                        return link
+                    text = link.inner_text(timeout=1500) or ""
+                    download = link.get_attribute("download") or ""
+                    title = link.get_attribute("title") or ""
+                    advertised = EroScriptsImporter._script_link_filename(
+                        href, text, download, title
+                    )
+                    if advertised and advertised.lower() == wanted:
+                        return link
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return None
+
     @staticmethod
     def find_script_links(
         page,
         page_url: str
     ) -> list[tuple[str, str]]:
 
-        print(
-            "[IMPORT] Scanning page links..."
-        )
+        print("[IMPORT] Expanding collapsed script sections...")
+        expanded = EroScriptsImporter._expand_collapsed_script_sections(page)
+        if expanded:
+            print(f"[IMPORT] Expanded {expanded} collapsed section(s).")
 
-        links = page.locator(
-            "a[href]"
-        )
+        print("[IMPORT] Hydrating lazy-loaded topic content...")
+        EroScriptsImporter._hydrate_full_topic(page)
 
+        # Scrolling can cause Discourse to instantiate additional collapsed blocks.
+        expanded_after_scroll = EroScriptsImporter._expand_collapsed_script_sections(page)
+        if expanded_after_scroll:
+            print(f"[IMPORT] Expanded {expanded_after_scroll} additional collapsed section(s).")
+            page.wait_for_timeout(150)
+
+        print("[IMPORT] Scanning page links...")
+
+        links = page.locator("a[href]")
         count = links.count()
 
-        print(
-            f"[IMPORT] Found {count} links on page."
-        )
+        print(f"[IMPORT] Found {count} links on page.")
 
-        # Use a dictionary keyed by URL.
-        #
-        # This removes duplicate occurrences of the
-        # exact same attachment while preserving order.
-        #
-        # Important:
-        # EroScripts pages can contain multiple versions
-        # of the same .funscript with the same filename but
-        # different attachment URLs.
-        #
-        # Example:
-        #
-        # old script:
-        #   /uploads/short-url/AAAA.funscript
-        #
-        # updated script:
-        #   /uploads/short-url/BBBB.funscript
-        #
-        # We want to keep BOTH.
+        # Key by resolved URL so duplicate appearances of the exact same
+        # attachment are removed while distinct versions remain separate.
         candidates = {}
 
         for index in range(count):
-
             try:
-
-                link = links.nth(
-                    index
-                )
-
-                href = link.get_attribute(
-                    "href",
-                    timeout=5000
-                )
-
+                link = links.nth(index)
+                href = link.get_attribute("href", timeout=5000)
                 if not href:
                     continue
 
-                if ".funscript" not in href.lower():
-                    continue
+                text = (link.inner_text(timeout=5000) or "").strip()
+                download = (link.get_attribute("download") or "").strip()
+                title = (link.get_attribute("title") or "").strip()
+                aria_label = (link.get_attribute("aria-label") or "").strip()
+                data_filename = (link.get_attribute("data-filename") or "").strip()
 
-                text = link.inner_text(
-                    timeout=5000
-                ).strip()
-
-            except Exception:
-
-                continue
-
-            if not text:
-                continue
-
-            filename = (
-                EroScriptsImporter.clean_filename(
-                    text
+                # Important: Discourse attachments can use a short /uploads/
+                # href with no extension. Treat human-facing filename metadata
+                # as authoritative when it advertises a .funscript. Blob-backed
+                # links sometimes put the real filename in a sibling/parent
+                # label while their own download attribute contains only a
+                # generated token, so recover from the nearest attachment text
+                # only after direct metadata has been exhausted.
+                filename = EroScriptsImporter._script_link_filename(
+                    href, text, download, title
                 )
-            )
+                if not filename:
+                    for advertised_text in (aria_label, data_filename):
+                        filename = EroScriptsImporter._script_link_filename(
+                            href, advertised_text, None, None
+                        )
+                        if filename:
+                            break
 
-            if not filename:
+                if not filename and str(href).lower().startswith("blob:"):
+                    nearby_values = []
+                    for xpath in ("xpath=..", "xpath=../.."):
+                        try:
+                            nearby = " ".join(
+                                (link.locator(xpath).inner_text(timeout=1500) or "").split()
+                            )
+                            if nearby and nearby not in nearby_values:
+                                nearby_values.append(nearby)
+                        except Exception:
+                            pass
+
+                    for nearby in nearby_values:
+                        # A local attachment wrapper can contain both the
+                        # generated blob token and the visible real filename.
+                        # Extract every .funscript-looking name and accept the
+                        # first non-generated one.
+                        for match in re.finditer(
+                            r"([^\/\r\n<>:\"|?*]+?\.funscript)(?:\b|$|[?#])",
+                            nearby,
+                            flags=re.IGNORECASE,
+                        ):
+                            candidate_name = EroScriptsImporter.clean_filename(match.group(1))
+                            if (
+                                candidate_name
+                                and not EroScriptsImporter._looks_generated_script_filename(candidate_name)
+                            ):
+                                filename = candidate_name
+                                break
+                        if filename:
+                            break
+
+                if not filename:
+                    continue
+            except Exception:
                 continue
 
-            script_url = urljoin(
-                page_url,
-                href
-            )
+            script_url = urljoin(page_url, href)
 
-            # Deduplicate exact duplicate links.
             if script_url in candidates:
                 continue
 
             candidates[script_url] = filename
 
-            print(
-                f"[IMPORT] Found unique script candidate: "
-                f"{filename}"
-            )
-
-            print(
-                f"[IMPORT] Candidate URL: "
-                f"{script_url}"
-            )
+            print(f"[IMPORT] Found unique script candidate: {filename}")
+            print(f"[IMPORT] Candidate URL: {script_url}")
 
         if not candidates:
-
-            print(
-                "[IMPORT] No .funscript candidates found."
-            )
-
+            print("[IMPORT] No .funscript candidates found.")
             return []
 
-        candidate_list = list(
-            candidates.items()
-        )
+        candidate_list = list(candidates.items())
 
-        print(
-            "\n[IMPORT] Unique .funscript candidates:"
-        )
+        print("\n[IMPORT] Unique .funscript candidates:")
+        for index, (script_url, filename) in enumerate(candidate_list, start=1):
+            print(f"[IMPORT]   {index}. {filename}")
+            print(f"[IMPORT]      {script_url}")
 
-        for index, (
-            script_url,
-            filename
-        ) in enumerate(
-            candidate_list,
-            start=1
-        ):
-
-            print(
-                f"[IMPORT]   {index}. {filename}"
-            )
-
-            print(
-                f"[IMPORT]      {script_url}"
-            )
-
-        # Keep every unique candidate. The caller may choose one
-        # candidate explicitly, while the multi-script importer uses
-        # this complete list.
         return candidate_list
 
     @staticmethod
@@ -694,6 +963,29 @@ class EroScriptsImporter:
         print(
             f"[IMPORT] Download URL: {script_url}"
         )
+
+        if str(script_url).lower().startswith("blob:"):
+            print("[IMPORT] Browser blob URL detected; reading attachment inside the EroScripts page...")
+            try:
+                values = page.evaluate(
+                    """async (url) => {
+                        const response = await fetch(url);
+                        if (!response.ok) throw new Error(`Blob fetch failed: ${response.status}`);
+                        const buffer = await response.arrayBuffer();
+                        return Array.from(new Uint8Array(buffer));
+                    }""",
+                    script_url,
+                )
+                content = bytes(values or [])
+            except Exception as exc:
+                raise RuntimeError(
+                    "Timed out or failed while reading the browser-only .funscript attachment: "
+                    f"{exc}"
+                ) from exc
+            if not content:
+                raise RuntimeError("EroScripts returned an empty funscript file.")
+            print(f"[IMPORT] Browser blob download complete: {len(content):,} bytes")
+            return content
 
         try:
 
@@ -903,10 +1195,10 @@ class EroScriptsImporter:
     def extract_eroscripts_thumbnail(cls, page, script_url: str) -> str | None:
         """Return a real EroScripts preview image, excluding blob heatmaps/icons."""
         try:
-            loc = page.locator(f'a[href="{script_url}"]')
-            if loc.count() == 0:
+            loc = cls._find_script_anchor(page, script_url, "")
+            if loc is None:
                 return None
-            container = cls._common_post_ancestor(loc.first)
+            container = cls._common_post_ancestor(loc)
             if container is None:
                 return None
             images = container.locator("img[src]")
@@ -930,13 +1222,11 @@ class EroScriptsImporter:
     def extract_video_for_script(page, script_url: str, filename: str) -> dict | None:
         """Find the video link(s) belonging to the same Discourse post as a script."""
         try:
-            loc = page.locator(f'a[href="{script_url}"]')
-            if loc.count() == 0:
-                loc = page.locator("a").filter(has_text=filename)
-            if loc.count() == 0:
+            loc = EroScriptsImporter._find_script_anchor(page, script_url, filename)
+            if loc is None:
                 return None
 
-            container = EroScriptsImporter._common_post_ancestor(loc.first)
+            container = EroScriptsImporter._common_post_ancestor(loc)
             if container is None:
                 return None
 
@@ -981,9 +1271,12 @@ class EroScriptsImporter:
         """Extract external video links from actual EroScripts post blocks only."""
         candidates = []
         try:
-            scripts = page.locator('a[href*=".funscript"]')
-            for i in range(scripts.count()):
-                loc = scripts.nth(i)
+            EroScriptsImporter._expand_collapsed_script_sections(page)
+            script_pairs = EroScriptsImporter.find_script_links(page, page.url)
+            for script_url, filename in script_pairs:
+                loc = EroScriptsImporter._find_script_anchor(page, script_url, filename)
+                if loc is None:
+                    continue
                 container = EroScriptsImporter._common_post_ancestor(loc)
                 if container is None:
                     continue
