@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
 
+from core.playback import resolve_playback_url
+
 
 class IndexBuilder:
 
@@ -110,6 +112,8 @@ class IndexBuilder:
 
         site = ""
         video_id = ""
+        source_url = ""
+        playback_url = ""
 
         if video_source:
 
@@ -119,6 +123,16 @@ class IndexBuilder:
 
             video_id = (
                 video_source["video_id"]
+                or ""
+            )
+
+            source_url = (
+                video_source["source_url"]
+                or ""
+            )
+
+            playback_url = (
+                resolve_playback_url(site, video_id, source_url)
                 or ""
             )
 
@@ -135,6 +149,12 @@ class IndexBuilder:
             "site": site,
 
             "id": video_id,
+
+            # Actual host page and, when resolvable, the direct media URL.
+            # The JS player uses playbackUrl for generic URL playback and
+            # falls back to manual sync if the host does not expose one.
+            "sourceUrl": source_url,
+            "playbackUrl": playback_url,
 
             "scripts": [
                 {

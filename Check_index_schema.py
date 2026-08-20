@@ -33,6 +33,12 @@ EXPECTED_VIDEO_FIELDS = {
 }
 
 
+OPTIONAL_VIDEO_FIELDS = {
+    "sourceUrl",
+    "playbackUrl",
+}
+
+
 EXPECTED_SCRIPT_FIELDS = {
     "name",
     "location",
@@ -44,11 +50,12 @@ def load_json(path):
         return json.load(file)
 
 
-def field_report(actual, expected, label):
+def field_report(actual, expected, label, optional=None):
     actual_fields = set(actual.keys())
+    optional = set(optional or ())
 
     missing = expected - actual_fields
-    extra = actual_fields - expected
+    extra = actual_fields - expected - optional
 
     if missing:
         print(f"  MISSING {label} fields:")
@@ -190,7 +197,8 @@ def main():
         if not field_report(
             video,
             EXPECTED_VIDEO_FIELDS,
-            label
+            label,
+            OPTIONAL_VIDEO_FIELDS,
         ):
             errors += 1
 

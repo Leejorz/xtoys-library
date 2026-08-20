@@ -1232,60 +1232,83 @@ class EroScriptsImporter:
 
     @staticmethod
     def extract_video_for_script(page, script_url: str, filename: str) -> dict | None:
-        """Find the video link(s) belonging to the same Discourse post as a script."""
+        """Find the nearest supported video link preceding a script in its Discourse post."""
         try:
             loc = EroScriptsImporter._find_script_anchor(page, script_url, filename)
             if loc is None:
                 return None
 
-            container = EroScriptsImporter._common_post_ancestor(loc)
-            if container is None:
-                return None
-
-            links = container.locator("a[href]")
-            preferred = []
-            fallback = []
             supported_hosts = {
                 "eporner.com", "rule34video.com", "noodledude.io",
                 "spankbang.com", "pmvhaven.com", "hmvmania.com", "pixeldrain.com",
             }
-            for i in range(links.count()):
-                link = links.nth(i)
-                href = link.get_attribute("href") or ""
+            image_exts = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".avif")
+
+            try:
+                prior_links = loc.evaluate("""el => {
+                    const root = el.closest('article') || el.closest('.topic-post') || el.closest('.cooked') || el.parentElement;
+                    if (!root) return [];
+                    const links = Array.from(root.querySelectorAll('a[href]'));
+                    const before = [];
+                    for (const a of links) {
+                        if (a === el || a.contains(el) || el.contains(a)) continue;
+                        const pos = a.compareDocumentPosition(el);
+                        if (pos & Node.DOCUMENT_POSITION_FOLLOWING) {
+                            before.push({href: a.href || a.getAttribute('href') || '', text: (a.innerText || a.textContent || '').trim()});
+                        }
+                    }
+                    return before.reverse();
+                }""") or []
+            except Exception:
+                prior_links = []
+
+            if not prior_links:
+                container = EroScriptsImporter._common_post_ancestor(loc)
+                if container is not None:
+                    links = container.locator("a[href]")
+                    for i in range(links.count() - 1, -1, -1):
+                        link = links.nth(i)
+                        prior_links.append({
+                            "href": link.get_attribute("href") or "",
+                            "text": " ".join((link.inner_text(timeout=2000) or "").split()),
+                        })
+
+            for raw in prior_links:
+                href = (raw.get("href") or "").strip()
                 if not href or ".funscript" in href.lower():
                     continue
                 full_url = urljoin(page.url, href)
                 if not re.match(r"^https?://", full_url, re.I):
                     continue
-                host = (urlparse(full_url).hostname or "").lower().removeprefix("www.")
-                if host in {"discuss.eroscripts.com", "eroscripts.com"}:
+                parsed = urlparse(full_url)
+                host = (parsed.hostname or "").lower().removeprefix("www.")
+                path_lower = (parsed.path or "").lower()
+                if not host or host in {"discuss.eroscripts.com", "eroscripts.com"}:
                     continue
-                link_text = " ".join((link.inner_text(timeout=2000) or "").split()) or None
+                if path_lower.endswith(image_exts):
+                    continue
+
+                text = " ".join((raw.get("text") or "").split()) or None
                 if is_pixeldrain_host(host):
                     resolved = resolve_pixeldrain_url(full_url) or {}
-                    host = "pixeldrain.com"
-                    candidate = {
-                        "site": host,
-                        "title": resolved.get("title") or link_text,
+                    return {
+                        "site": "pixeldrain.com",
+                        "title": resolved.get("title") or text,
                         "url": full_url,
                         "video_id": resolved.get("video_id"),
-                        "source": "script-post-block",
+                        "source": "nearest-preceding-video-link",
                     }
-                else:
-                    candidate = {
-                        "site": host,
-                        "title": link_text,
-                        "url": full_url,
-                        "source": "script-post-block",
-                    }
-                if host in supported_hosts or host.endswith(".noodledude.io"):
-                    preferred.append(candidate)
-                elif link_text and re.match(r"https?://", link_text, re.I):
-                    preferred.append(candidate)
-                else:
-                    fallback.append(candidate)
 
-            return (preferred + fallback)[0] if (preferred or fallback) else None
+                if host in supported_hosts or host.endswith(".noodledude.io"):
+                    return {
+                        "site": host,
+                        "title": text,
+                        "url": full_url,
+                        "video_id": EroScriptsImporter._extract_video_id_from_url(full_url),
+                        "source": "nearest-preceding-video-link",
+                    }
+
+            return None
         except Exception:
             return None
 

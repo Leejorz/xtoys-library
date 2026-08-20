@@ -691,6 +691,7 @@ class Application:
             if not isinstance(generated.get(field), typ):
                 errors.append(f"{field} should be {typ.__name__}")
         expected_video={"name","site","id","scripts","tags","created_at","url","valid","creator","ignore","last_checked","thumbnail","displayName"}
+        optional_video={"sourceUrl","playbackUrl"}
         expected_script={"name","location"}
         videos=generated.get("videos",[])
         lines.append(f"Generated video objects: {len(videos)}")
@@ -698,7 +699,14 @@ class Application:
         for i, video in enumerate(videos,1):
             if not isinstance(video,dict):
                 errors.append(f"Video #{i} is not an object"); continue
-            if set(video)!=expected_video: errors.append(f"Video #{i} fields mismatch")
+            video_fields = set(video)
+            missing_video = expected_video - video_fields
+            extra_video = video_fields - expected_video - optional_video
+            if missing_video or extra_video:
+                errors.append(
+                    f"Video #{i} fields mismatch: "
+                    f"missing={sorted(missing_video)}, extra={sorted(extra_video)}"
+                )
             scripts=video.get("scripts")
             if not isinstance(scripts,list) or not scripts:
                 errors.append(f"Video #{i} contains no scripts"); continue
