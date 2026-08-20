@@ -1,0 +1,30 @@
+xToys Library Manager performance/stability + download optimization patch
+
+Built from the user's latest uploaded project ZIP.
+
+Edit Video stability:
+- Thumbnail network fetch runs off the Tkinter UI thread.
+- Tag edits are staged and committed together on Save.
+- index.json is no longer rebuilt after every individual tag add/remove.
+- Prevents multiple overlapping Edit Video windows.
+
+EroScripts import/download performance:
+- Funscript/video associations are computed once and reused.
+- Diagnostic generation reuses existing associations instead of rescanning.
+- Long-page link discovery extracts anchor metadata in one browser-side pass,
+  avoiding many Playwright round trips per link.
+- Selected attachments are fetched in small concurrent browser batches.
+- Blob-backed attachments no longer require one Playwright evaluation per file.
+- Cross-origin/CDN fetch failures automatically fall back to the existing
+  authenticated downloader, preserving compatibility.
+- Failed individual attachments are skipped without aborting the entire batch.
+- Keeps only the newest 20 EroScripts diagnostic reports.
+
+Compatibility/stability:
+- Restores strict supported-video-page validation for Rule34Video, PMVHaven,
+  HMVMania, and Pixeldrain URL forms.
+- Existing thumbnail/index/player behavior is otherwise left unchanged.
+
+Validation:
+- Python syntax check passed.
+- Full test suite: 23 passed.

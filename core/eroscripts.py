@@ -4,6 +4,7 @@ from urllib.parse import urljoin, urlparse
 from core.pixeldrain import is_pixeldrain_host, resolve_pixeldrain_url
 from datetime import datetime
 import hashlib
+import base64
 import re
 
 from playwright.sync_api import BrowserContext
@@ -48,7 +49,14 @@ class EroScriptsImporter:
         self.context = context
         self.root = Path(root).resolve() if root is not None else Path.cwd().resolve()
 
-    def _write_diagnostic_report(self, page, page_url: str, candidates: list[tuple[str, str]], video_candidates: list[dict]) -> Path:
+    def _write_diagnostic_report(
+        self,
+        page,
+        page_url: str,
+        candidates: list[tuple[str, str]],
+        video_candidates: list[dict],
+        associations: list[dict | None] | None = None,
+    ) -> Path:
         """Write a safe diagnostic report for importer debugging.
 
         The report contains page/link structure and importer decisions, but never
@@ -128,8 +136,12 @@ class EroScriptsImporter:
         lines.append("")
 
         lines += ["=== PER-SCRIPT VIDEO ASSOCIATION ==="]
-        for i, (script_url, filename) in enumerate(candidates, 1):
-            matched = self.extract_video_for_script(page, script_url, filename)
+        if associations is None:
+            associations = [
+                self.extract_video_for_script(page, script_url, filename)
+                for script_url, filename in candidates
+            ]
+        for i, ((script_url, filename), matched) in enumerate(zip(candidates, associations), 1):
             lines.append(f"[{i}] {filename!r}")
             lines.append(f"    matched_video={matched!r}")
         lines.append("")
@@ -141,6 +153,21 @@ class EroScriptsImporter:
         ]
 
         report_path.write_text("\n".join(lines), encoding="utf-8")
+
+        # Diagnostics are useful when a page changes, but keeping hundreds of
+        # full-page reports wastes disk space and slows folder scans/backups.
+        # Keep only the newest 20 reports.
+        try:
+            reports = sorted(
+                logs_dir.glob("eroscripts_diagnostic_*.txt"),
+                key=lambda item: item.stat().st_mtime,
+                reverse=True,
+            )
+            for stale in reports[20:]:
+                stale.unlink(missing_ok=True)
+        except OSError:
+            pass
+
         return report_path
 
     def discover_from_url(self, url: str) -> list[dict]:
@@ -241,19 +268,29 @@ class EroScriptsImporter:
             title = self.extract_topic_title(page)
             metadata = self.extract_metadata(page, title)
             video_candidates = self.extract_video_candidates(page)
-            diagnostic_path = self._write_diagnostic_report(page, url, candidates, video_candidates)
+            print("[IMPORT] Matching selected funscripts to nearby video sources once...")
+            associations = [
+                self.extract_video_for_script(page, script_url, filename)
+                for script_url, filename in candidates
+            ]
+            diagnostic_path = self._write_diagnostic_report(
+                page, url, candidates, video_candidates, associations=associations
+            )
             print(f"[IMPORT] Diagnostic report: {diagnostic_path.resolve()}")
 
             if write_files:
                 destination.mkdir(parents=True, exist_ok=True)
 
+            print(f"[IMPORT] Downloading {len(candidates)} selected attachment(s) in small batches...")
+            downloaded_content, download_errors = self.download_scripts_batch(page, candidates)
+
             results = []
             failures = []
-            for number, (script_url, filename) in enumerate(candidates, start=1):
-                print(f"\n[IMPORT] Downloading selected script {number}/{len(candidates)}: {filename}")
-                try:
-                    content = self.download_script(page, script_url)
-                except Exception as exc:
+            for number, ((script_url, filename), matched_video) in enumerate(zip(candidates, associations), start=1):
+                print(f"\n[IMPORT] Preparing selected script {number}/{len(candidates)}: {filename}")
+                content = downloaded_content.get(script_url)
+                if not content:
+                    exc = download_errors.get(script_url, "download returned no content")
                     failures.append(f"{filename}: {exc}")
                     print(f"[IMPORT] Skipping failed script: {filename}: {exc}")
                     continue
@@ -264,7 +301,6 @@ class EroScriptsImporter:
                     print(f"[IMPORT] Saved: {output_path}")
 
                 content_hash = hashlib.sha256(content).hexdigest()
-                matched_video = self.extract_video_for_script(page, script_url, filename)
                 result_candidates = [matched_video] if matched_video else []
                 if matched_video:
                     matched_video = dict(matched_video)
@@ -341,20 +377,23 @@ class EroScriptsImporter:
             print(f"[IMPORT] Found {len(candidates)} unique .funscript candidate(s).")
             print("[IMPORT] Matching each funscript to the video link in its local EroScripts block.")
 
-            diagnostic_path = self._write_diagnostic_report(page, url, candidates, video_candidates)
+            associations = [
+                self.extract_video_for_script(page, script_url, filename)
+                for script_url, filename in candidates
+            ]
+            diagnostic_path = self._write_diagnostic_report(
+                page, url, candidates, video_candidates, associations=associations
+            )
             print(f"[IMPORT] Diagnostic report: {diagnostic_path.resolve()}")
 
             destination.mkdir(parents=True, exist_ok=True)
             results = []
-            for number, (script_url, filename) in enumerate(candidates, start=1):
+            for number, ((script_url, filename), matched_video) in enumerate(zip(candidates, associations), start=1):
                 print(f"\n[IMPORT] Importing script {number}/{len(candidates)}: {filename}")
                 content = self.download_script(page, script_url)
                 output_path = destination / filename
                 output_path.write_bytes(content)
                 content_hash = hashlib.sha256(content).hexdigest()
-                matched_video = self.extract_video_for_script(
-                    page, script_url, filename
-                )
                 result_candidates = [matched_video] if matched_video else []
                 if matched_video:
                     matched_video = dict(matched_video)
@@ -831,37 +870,59 @@ class EroScriptsImporter:
             print(f"[IMPORT] Expanded {expanded_after_scroll} additional collapsed section(s).")
             page.wait_for_timeout(150)
 
-        print("[IMPORT] Scanning page links...")
+        print("[IMPORT] Scanning page links in one browser pass...")
 
-        links = page.locator("a[href]")
-        count = links.count()
-
-        print(f"[IMPORT] Found {count} links on page.")
-
-        # Key by resolved URL so duplicate appearances of the exact same
-        # attachment are removed while distinct versions remain separate.
-        candidates = {}
-
-        for index in range(count):
-            try:
-                link = links.nth(index)
-                href = link.get_attribute("href", timeout=5000)
-                if not href:
+        # Pull all useful anchor metadata across the Playwright boundary once.
+        # The old implementation made several locator/get_attribute/inner_text
+        # calls for every anchor, which became very slow on long Discourse topics.
+        try:
+            link_rows = page.evaluate(
+                """() => Array.from(document.querySelectorAll('a[href]')).map(a => ({
+                    href: a.getAttribute('href') || '',
+                    text: (a.innerText || '').trim(),
+                    download: (a.getAttribute('download') || '').trim(),
+                    title: (a.getAttribute('title') || '').trim(),
+                    ariaLabel: (a.getAttribute('aria-label') || '').trim(),
+                    dataFilename: (a.getAttribute('data-filename') || '').trim(),
+                    parentText: a.parentElement ? (a.parentElement.innerText || '') : '',
+                    grandparentText: a.parentElement && a.parentElement.parentElement
+                        ? (a.parentElement.parentElement.innerText || '') : ''
+                }))"""
+            ) or []
+        except Exception as exc:
+            print(f"[IMPORT] Batched link scan failed ({exc}); falling back to locator scan.")
+            link_rows = []
+            links = page.locator("a[href]")
+            for index in range(links.count()):
+                try:
+                    link = links.nth(index)
+                    link_rows.append({
+                        "href": link.get_attribute("href", timeout=3000) or "",
+                        "text": (link.inner_text(timeout=3000) or "").strip(),
+                        "download": (link.get_attribute("download") or "").strip(),
+                        "title": (link.get_attribute("title") or "").strip(),
+                        "ariaLabel": (link.get_attribute("aria-label") or "").strip(),
+                        "dataFilename": (link.get_attribute("data-filename") or "").strip(),
+                        "parentText": "",
+                        "grandparentText": "",
+                    })
+                except Exception:
                     continue
 
-                text = (link.inner_text(timeout=5000) or "").strip()
-                download = (link.get_attribute("download") or "").strip()
-                title = (link.get_attribute("title") or "").strip()
-                aria_label = (link.get_attribute("aria-label") or "").strip()
-                data_filename = (link.get_attribute("data-filename") or "").strip()
+        print(f"[IMPORT] Found {len(link_rows)} links on page.")
 
-                # Important: Discourse attachments can use a short /uploads/
-                # href with no extension. Treat human-facing filename metadata
-                # as authoritative when it advertises a .funscript. Blob-backed
-                # links sometimes put the real filename in a sibling/parent
-                # label while their own download attribute contains only a
-                # generated token, so recover from the nearest attachment text
-                # only after direct metadata has been exhausted.
+        candidates = {}
+        for row in link_rows:
+            try:
+                href = str(row.get("href") or "").strip()
+                if not href:
+                    continue
+                text = str(row.get("text") or "").strip()
+                download = str(row.get("download") or "").strip()
+                title = str(row.get("title") or "").strip()
+                aria_label = str(row.get("ariaLabel") or "").strip()
+                data_filename = str(row.get("dataFilename") or "").strip()
+
                 filename = EroScriptsImporter._script_link_filename(
                     href, text, download, title
                 )
@@ -873,23 +934,13 @@ class EroScriptsImporter:
                         if filename:
                             break
 
-                if not filename and str(href).lower().startswith("blob:"):
+                if not filename and href.lower().startswith("blob:"):
                     nearby_values = []
-                    for xpath in ("xpath=..", "xpath=../.."):
-                        try:
-                            nearby = " ".join(
-                                (link.locator(xpath).inner_text(timeout=1500) or "").split()
-                            )
-                            if nearby and nearby not in nearby_values:
-                                nearby_values.append(nearby)
-                        except Exception:
-                            pass
-
+                    for value in (row.get("parentText"), row.get("grandparentText")):
+                        nearby = " ".join(str(value or "").split())
+                        if nearby and nearby not in nearby_values:
+                            nearby_values.append(nearby)
                     for nearby in nearby_values:
-                        # A local attachment wrapper can contain both the
-                        # generated blob token and the visible real filename.
-                        # Extract every .funscript-looking name and accept the
-                        # first non-generated one.
                         for match in re.finditer(
                             r"([^\/\r\n<>:\"|?*]+?\.funscript)(?:\b|$|[?#])",
                             nearby,
@@ -911,12 +962,9 @@ class EroScriptsImporter:
                 continue
 
             script_url = urljoin(page_url, href)
-
             if script_url in candidates:
                 continue
-
             candidates[script_url] = filename
-
             print(f"[IMPORT] Found unique script candidate: {filename}")
             print(f"[IMPORT] Candidate URL: {script_url}")
 
@@ -925,12 +973,10 @@ class EroScriptsImporter:
             return []
 
         candidate_list = list(candidates.items())
-
         print("\n[IMPORT] Unique .funscript candidates:")
         for index, (script_url, filename) in enumerate(candidate_list, start=1):
             print(f"[IMPORT]   {index}. {filename}")
             print(f"[IMPORT]      {script_url}")
-
         return candidate_list
 
     @staticmethod
@@ -950,6 +996,85 @@ class EroScriptsImporter:
             candidates = non_music
 
         return candidates[-1]
+
+    def download_scripts_batch(
+        self,
+        page,
+        candidates: list[tuple[str, str]],
+        batch_size: int = 6,
+    ) -> tuple[dict[str, bytes], dict[str, str]]:
+        """Fetch selected attachments efficiently, with safe per-file fallback.
+
+        Browser-side fetches are performed in small concurrent batches. This is
+        especially important for Discourse ``blob:`` attachments, where one
+        Playwright round-trip per file was a major import bottleneck. URLs that
+        cannot be fetched in the page (for example because of CORS) fall back to
+        the existing authenticated request path.
+        """
+        downloaded: dict[str, bytes] = {}
+        errors: dict[str, str] = {}
+        urls = [url for url, _filename in candidates]
+
+        js = """async (urls) => {
+            const toBase64 = (bytes) => {
+                const chunk = 0x8000;
+                let binary = '';
+                for (let i = 0; i < bytes.length; i += chunk) {
+                    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+                }
+                return btoa(binary);
+            };
+            return await Promise.all(urls.map(async (url) => {
+                try {
+                    const response = await fetch(url, {credentials: 'include'});
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                    const bytes = new Uint8Array(await response.arrayBuffer());
+                    if (!bytes.length) throw new Error('empty response');
+                    return {url, ok: true, data: toBase64(bytes)};
+                } catch (error) {
+                    return {url, ok: false, error: String(error && error.message || error)};
+                }
+            }));
+        }"""
+
+        for start in range(0, len(urls), max(1, batch_size)):
+            chunk = urls[start:start + max(1, batch_size)]
+            print(f"[IMPORT] Fetching attachment batch {start + 1}-{start + len(chunk)} of {len(urls)}...")
+            rows = []
+            try:
+                rows = page.evaluate(js, chunk) or []
+            except Exception as exc:
+                print(f"[IMPORT] Browser batch fetch failed; using per-file fallback: {exc}")
+
+            returned = set()
+            for row in rows:
+                url = str((row or {}).get("url") or "")
+                if not url:
+                    continue
+                returned.add(url)
+                if (row or {}).get("ok"):
+                    try:
+                        content = base64.b64decode((row or {}).get("data") or "", validate=True)
+                        if content:
+                            downloaded[url] = content
+                            continue
+                    except Exception as exc:
+                        errors[url] = f"Invalid browser download data: {exc}"
+                else:
+                    errors[url] = str((row or {}).get("error") or "browser fetch failed")
+
+            # Preserve compatibility for cross-origin/CDN URLs by using the
+            # established request/blob downloader whenever browser fetch fails.
+            for url in chunk:
+                if url in downloaded:
+                    continue
+                try:
+                    downloaded[url] = self.download_script(page, url)
+                    errors.pop(url, None)
+                except Exception as exc:
+                    errors[url] = str(exc)
+
+        return downloaded, errors
 
     def download_script(
         self,
@@ -1141,6 +1266,19 @@ class EroScriptsImporter:
         return []
 
     @staticmethod
+    def _is_supported_video_page_url(host: str, path: str) -> bool:
+        """Reject navigation/profile links on hosts that also contain videos."""
+        host = (host or "").lower().removeprefix("www.")
+        path = path or "/"
+        if host == "rule34video.com":
+            return bool(re.search(r"^/video/\d+(?:/|$)", path, re.I))
+        if host in {"pmvhaven.com", "hmvmania.com"}:
+            return bool(re.search(r"^/video/[^/]+(?:/|$)", path, re.I))
+        if is_pixeldrain_host(host):
+            return bool(re.search(r"^/(?:u|l)/[^/]+", path, re.I))
+        return True
+
+    @staticmethod
     def _extract_video_id_from_url(video_url: str | None) -> str | None:
         if not video_url:
             return None
@@ -1300,9 +1438,7 @@ class EroScriptsImporter:
                     }
 
                 if host in supported_hosts or host.endswith(".noodledude.io"):
-                    # Rule34Video has many non-video pages (members, tags, etc.).
-                    # Only accept its canonical numeric /video/<id>/ form.
-                    if host == "rule34video.com" and not re.search(r"^/video/\d+(?:/|$)", parsed.path or "", re.I):
+                    if not EroScriptsImporter._is_supported_video_page_url(host, parsed.path or ""):
                         continue
                     return {
                         "site": host,
@@ -1351,7 +1487,7 @@ class EroScriptsImporter:
                             "video_id": resolved.get("video_id"),
                         }
                     else:
-                        if host == "rule34video.com" and not re.search(r"^/video/\d+(?:/|$)", parsed.path or "", re.I):
+                        if not EroScriptsImporter._is_supported_video_page_url(host, parsed.path or ""):
                             continue
                         item = {"site": host, "title": text, "url": full_url}
                     if item not in candidates:

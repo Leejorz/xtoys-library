@@ -1225,6 +1225,18 @@ class LibraryGUI:
         # ---------------------------------------------------------
 
         def edit_selected_source(event=None):
+            # Only allow one video-source editor at a time. Multiple editors can
+            # otherwise launch overlapping thumbnail/network work and index
+            # rebuilds for the same SQLite connection.
+            existing_editor = getattr(self, "_video_source_editor", None)
+            try:
+                if existing_editor is not None and existing_editor.winfo_exists():
+                    existing_editor.lift()
+                    existing_editor.focus_force()
+                    return
+            except tk.TclError:
+                self._video_source_editor = None
+
             selection = tree.selection()
 
             if not selection:
@@ -1255,6 +1267,17 @@ class LibraryGUI:
             )
 
             editor = tk.Toplevel(window)
+            self._video_source_editor = editor
+
+            def close_editor():
+                if getattr(self, "_video_source_editor", None) is editor:
+                    self._video_source_editor = None
+                try:
+                    editor.destroy()
+                except tk.TclError:
+                    pass
+
+            editor.protocol("WM_DELETE_WINDOW", close_editor)
             editor.title("Edit Video Source")
             editor.geometry("620x330")
             editor.minsize(560, 300)
@@ -1353,6 +1376,13 @@ class LibraryGUI:
                 wraplength=570,
             ).pack(anchor="w", pady=(0, 8))
 
+            # Stage tag edits in memory. Previously every Add/Remove wrote to
+            # SQLite and rebuilt index.json immediately, which made this dialog
+            # increasingly slow and could overlap with thumbnail network work.
+            pending_tags = list(
+                self.application.database.get_tags_for_script(script_id)
+            )
+
             # Tag editor. Tags are stored in script_tags and are emitted by
             # IndexBuilder into both the video's tags array and the top-level
             # index tag map.
@@ -1424,16 +1454,10 @@ class LibraryGUI:
                 if not selected:
                     return
                 value = preset_list.get(selected[0])
-                current = list(
-                    self.application.database.get_tags_for_script(script_id)
-                )
-                if value not in current:
-                    current.append(value)
-                    self.application.database.replace_script_tags(
-                        script_id, current
-                    )
-                    self.application.build_index()
+                if value not in pending_tags:
+                    pending_tags.append(value)
                     refresh_tags()
+                    status_var.set("Tag changes will be applied when you click Save.")
 
             ttk.Button(
                 preset_frame,
@@ -1455,41 +1479,27 @@ class LibraryGUI:
 
             def refresh_tags():
                 tags_list.delete(0, "end")
-                for tag in self.application.database.get_tags_for_script(
-                    script_id
-                ):
+                for tag in pending_tags:
                     tags_list.insert("end", tag)
 
             def add_tag():
                 value = tag_var.get().strip()
                 if not value:
                     return
-                current = list(
-                    self.application.database.get_tags_for_script(script_id)
-                )
-                if value not in current:
-                    current.append(value)
-                    self.application.database.replace_script_tags(
-                        script_id, current
-                    )
-                    self.application.build_index()
+                if value not in pending_tags:
+                    pending_tags.append(value)
                     refresh_tags()
-                    tag_var.set("")
+                    status_var.set("Tag changes will be applied when you click Save.")
+                tag_var.set("")
 
             def remove_tag():
                 selected = tags_list.curselection()
                 if not selected:
                     return
                 remove = tags_list.get(selected[0])
-                current = [
-                    tag for tag in self.application.database.get_tags_for_script(script_id)
-                    if tag != remove
-                ]
-                self.application.database.replace_script_tags(
-                    script_id, current
-                )
-                self.application.build_index()
+                pending_tags[:] = [tag for tag in pending_tags if tag != remove]
                 refresh_tags()
+                status_var.set("Tag changes will be applied when you click Save.")
 
             ttk.Button(
                 manual_frame,
@@ -1582,6 +1592,9 @@ class LibraryGUI:
                     return
 
                 try:
+                    # Keep all SQLite/index work on the Tk/main thread. Commit
+                    # source + staged tags once, instead of rebuilding after
+                    # every individual tag click.
                     if source:
                         self.application.database.edit_video_source(
                             source["id"],
@@ -1597,18 +1610,10 @@ class LibraryGUI:
                             source_url=url,
                         )
 
-                    thumbnail = ThumbnailExtractor.fetch(url)
-                    if thumbnail:
-                        self.application.database.update_script_thumbnail(script_id, thumbnail)
-
-                    self.application.build_index()
-
-                    editor.destroy()
-                    load_scripts()
-                    self.refresh_count()
-                    self.set_status(
-                        f"Video source saved for {title}."
+                    self.application.database.replace_script_tags(
+                        script_id, list(pending_tags)
                     )
+                    self.application.build_index()
 
                 except Exception as error:
                     messagebox.showerror(
@@ -1616,6 +1621,48 @@ class LibraryGUI:
                         str(error),
                         parent=editor,
                     )
+                    return
+
+                close_editor()
+                load_scripts()
+                self.refresh_count()
+                self.set_status(
+                    f"Video source saved for {title}. Fetching thumbnail in background..."
+                )
+
+                # Thumbnail page fetching is network-bound and used to run
+                # synchronously inside the Save button callback. A slow/broken
+                # host could freeze the entire Tk UI for 12+ seconds. Do only
+                # the network extraction in a daemon worker, then marshal DB
+                # and index changes back onto Tk's main thread.
+                def thumbnail_worker():
+                    try:
+                        thumbnail = ThumbnailExtractor.fetch(url, timeout=8.0)
+                    except Exception:
+                        thumbnail = None
+
+                    def finish_thumbnail():
+                        try:
+                            if thumbnail:
+                                self.application.database.update_script_thumbnail(
+                                    script_id, thumbnail
+                                )
+                                self.application.build_index()
+                                self.set_status(
+                                    f"Video source and thumbnail saved for {title}."
+                                )
+                            else:
+                                self.set_status(
+                                    f"Video source saved for {title}; no thumbnail was found."
+                                )
+                        except Exception as error:
+                            self.set_status(
+                                f"Video source saved for {title}; thumbnail update failed: {error}"
+                            )
+
+                    self.root.after(0, finish_thumbnail)
+
+                threading.Thread(target=thumbnail_worker, daemon=True).start()
 
             ttk.Button(
                 buttons,
