@@ -57,6 +57,11 @@ class Application:
 
         self.database.initialize()
 
+        # Runtime-only performance caches. They intentionally do not change
+        # the database schema and are discarded when the app exits.
+        self._scan_hash_cache = {}
+        self._thumbnail_migration_failures = set()
+
     def run(self):
 
         self.logger.info(
@@ -82,7 +87,8 @@ class Application:
                 progress_callback(message)
 
         scanner = LibraryScanner(
-            self.root / self.config.funscripts_dir
+            self.root / self.config.funscripts_dir,
+            hash_cache=self._scan_hash_cache,
         )
 
         progress("Scanning .funscript files...")
@@ -239,28 +245,73 @@ class Application:
         return public_url
 
     def _localize_external_thumbnails(self, progress_callback=None) -> tuple[int, int]:
-        """Migrate hotlinked thumbnails to original-format repository image files."""
-        migrated = 0
-        failed = 0
+        """Migrate hotlinked thumbnails without serially blocking on slow hosts.
+
+        Network/image decoding runs in a small worker pool, while SQLite updates
+        remain on the caller thread. Failed URLs are remembered for this app
+        session so every Build Index/Rebuild/Publish does not retry the same
+        dead host again.
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        jobs = []
         for script in self.database.all_scripts():
             thumbnail = (script["thumbnail"] or "").strip()
             if not thumbnail or not thumbnail.lower().startswith(("http://", "https://")):
                 continue
             if "raw.githubusercontent.com" in thumbnail.lower() and "/images/" in thumbnail.lower():
                 continue
+            failure_key = (script["id"], thumbnail)
+            if failure_key in self._thumbnail_migration_failures:
+                continue
             source = self.database.get_video_source(script["id"])
             referer = (source["source_url"] if source else None) or script["eroscripts_url"]
-            stored = self._store_repository_thumbnail(
-                script["id"], script["filename"], thumbnail, referer=referer
+            images_dir = self.root / self.config.images_dir
+            stem = images_dir / self._thumbnail_slug(script["filename"])
+            jobs.append((script, thumbnail, referer, stem, failure_key))
+
+        if not jobs:
+            return 0, 0
+
+        migrated = 0
+        failed = 0
+        workers = min(4, len(jobs))
+
+        def download(job):
+            script, thumbnail, referer, stem, failure_key = job
+            local_image = ThumbnailExtractor.download_image(
+                thumbnail,
+                stem,
+                referer=referer,
+                timeout=6.0,
             )
-            if stored:
-                migrated += 1
-                if progress_callback:
-                    progress_callback(f"Saved thumbnail locally for {script['filename']}")
-            else:
-                failed += 1
-                if progress_callback:
-                    progress_callback(f"Could not download thumbnail for {script['filename']}")
+            return job, local_image
+
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="thumb") as pool:
+            futures = [pool.submit(download, job) for job in jobs]
+            for future in as_completed(futures):
+                try:
+                    job, local_image = future.result()
+                except Exception:
+                    job = jobs[futures.index(future)]
+                    local_image = None
+
+                script, thumbnail, referer, stem, failure_key = job
+                if local_image is not None:
+                    public_url = self._repository_image_url(local_image)
+                    self.database.update_script_thumbnail(script["id"], public_url)
+                    migrated += 1
+                    if progress_callback:
+                        progress_callback(f"Saved thumbnail locally for {script['filename']}")
+                else:
+                    failed += 1
+                    self._thumbnail_migration_failures.add(failure_key)
+                    if progress_callback:
+                        progress_callback(
+                            f"Could not download thumbnail for {script['filename']}; "
+                            "will not retry until restart."
+                        )
+
         return migrated, failed
 
     def build_index(self, progress_callback=None):
@@ -720,7 +771,11 @@ class Application:
         lines.append("\nSCHEMA CHECK PASSED")
         return True, "\n".join(lines)
 
-    def git_publish(self, commit_message: str = "Update xToys Library") -> dict:
+    def git_publish(
+        self,
+        commit_message: str = "Update xToys Library",
+        skip_initial_fetch: bool = False,
+    ) -> dict:
         """Safely publish the current working tree to ``origin/{configured_branch}``.
 
         The local project is treated as the source of truth. If GitHub has a
@@ -798,12 +853,16 @@ class Application:
             "*.funscript text eol=lf\n"
             "*.bat text eol=crlf\n"
         )
+        attributes_created = False
         if not attributes_path.exists():
             attributes_path.write_text(attributes_content, encoding="utf-8", newline="\n")
+            attributes_created = True
 
-        # Refresh origin/{configured_branch} before deciding how much synchronization is
-        # needed. This does not modify the working tree.
-        run_git("fetch", "origin", configured_branch)
+        # The publish preview has usually just fetched this branch. Avoid doing
+        # the same network round-trip twice; a rejected push is still handled
+        # below by fetching/merging and retrying safely.
+        if not skip_initial_fetch:
+            run_git("fetch", "origin", configured_branch)
 
         backup_root = (
             git_dir
@@ -894,7 +953,8 @@ class Application:
             # Stage the complete current project state. Renames/deletions are
             # intentional when they are present in the working tree.
             run_git("add", "-A")
-            run_git("add", "--renormalize", ".")
+            if attributes_created:
+                run_git("add", "--renormalize", ".")
             staged = run_git(
                 "diff", "--cached", "--name-only"
             ).stdout.splitlines()
@@ -946,7 +1006,8 @@ class Application:
                     )
 
                 run_git("add", "-A")
-                run_git("add", "--renormalize", ".")
+                if attributes_created:
+                    run_git("add", "--renormalize", ".")
                 run_git("commit", "--no-edit")
                 commit_hash = run_git(
                     "rev-parse", "--short", "HEAD"
@@ -1405,15 +1466,11 @@ class Application:
             result.tags
         )
 
-        # Prefer the actual video-source thumbnail.  EroScripts preview is
-        # retained as the fallback.  Empty extraction never erases an
-        # existing thumbnail.
-        thumbnail = None
-        source_url = getattr(result, "video_url", None)
-        if source_url:
-            thumbnail = ThumbnailExtractor.fetch(source_url)
-        if not thumbnail:
-            thumbnail = getattr(result, "thumbnail_url", None)
+        # Thumbnail discovery already happens during source preparation/download.
+        # Do not perform another network request here: this method runs while
+        # the user presses Save, and the duplicate fetch was a major source of
+        # freezes/crashes on slow video hosts.
+        thumbnail = getattr(result, "thumbnail_url", None)
         if thumbnail:
             # Keep the detected source URL in SQLite first.  ``build_index()``
             # converts it into the original xsqueezeme repository-thumbnail

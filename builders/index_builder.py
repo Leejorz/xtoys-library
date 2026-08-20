@@ -4,7 +4,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
 
-from core.playback import resolve_playback_url
 
 
 class IndexBuilder:
@@ -131,10 +130,16 @@ class IndexBuilder:
                 or ""
             )
 
-            playback_url = (
-                resolve_playback_url(site, video_id, source_url)
-                or ""
-            )
+            # Index generation must stay local and deterministic. HMVMania and
+            # PMVHaven require remote page scraping to discover media URLs, and
+            # doing that for every entry made every rebuild/index/publish wait
+            # on network timeouts. The current xToys player uses those sites in
+            # manual-sync mode anyway. Pixeldrain can be expressed directly
+            # from its already-resolved file ID without a network request.
+            if site == "pixeldrain" and video_id and "#item=" not in video_id:
+                playback_url = f"https://pixeldrain.com/api/file/{video_id}"
+            else:
+                playback_url = ""
 
         # IMPORTANT: xToys uses the EroScripts page as the video object's
         # `url`. The actual video-host URL is stored separately in the
@@ -184,7 +189,11 @@ class IndexBuilder:
 
             "ignore": False,
 
-            "last_checked": now,
+            "last_checked": (
+                script["updated_at"]
+                or script["created_at"]
+                or now
+            ),
 
             "thumbnail": (
                 script["thumbnail"]

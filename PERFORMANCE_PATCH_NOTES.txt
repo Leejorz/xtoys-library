@@ -1,30 +1,48 @@
-xToys Library Manager performance/stability + download optimization patch
+xToys Library Manager - cumulative performance/stability patch
 
-Built from the user's latest uploaded project ZIP.
+Built from the latest uploaded project, including the previous EroScripts
+download/Edit Video optimizations.
 
-Edit Video stability:
-- Thumbnail network fetch runs off the Tkinter UI thread.
-- Tag edits are staged and committed together on Save.
-- index.json is no longer rebuilt after every individual tag add/remove.
-- Prevents multiple overlapping Edit Video windows.
+Save/import improvements
+- Saving downloaded EroScripts no longer re-fetches the video thumbnail over
+  the network. Thumbnail discovery already happened earlier in the import flow.
+- Save no longer calls Build Index a second time after Rebuild Library.
+- SQLite now uses WAL mode + synchronous=NORMAL + busy timeout to reduce the
+  cost of many small metadata commits.
 
-EroScripts import/download performance:
-- Funscript/video associations are computed once and reused.
-- Diagnostic generation reuses existing associations instead of rescanning.
-- Long-page link discovery extracts anchor metadata in one browser-side pass,
-  avoiding many Playwright round trips per link.
-- Selected attachments are fetched in small concurrent browser batches.
-- Blob-backed attachments no longer require one Playwright evaluation per file.
-- Cross-origin/CDN fetch failures automatically fall back to the existing
-  authenticated downloader, preserving compatibility.
-- Failed individual attachments are skipped without aborting the entire batch.
-- Keeps only the newest 20 EroScripts diagnostic reports.
+Rebuild Library improvements
+- Added an in-memory file hash cache keyed by mtime + size. Unchanged
+  funscripts are not re-read and re-hashed on every rebuild.
+- Scanner reads files in larger chunks.
+- Rebuild Library remains authoritative and still regenerates index.json once.
 
-Compatibility/stability:
-- Restores strict supported-video-page validation for Rule34Video, PMVHaven,
-  HMVMania, and Pixeldrain URL forms.
-- Existing thumbnail/index/player behavior is otherwise left unchanged.
+Build Index improvements
+- Removed HMVMania/PMVHaven remote page scraping from normal index generation.
+  Those sites are manual-sync in the current xToys player, so scraping them on
+  every build provided no useful playback benefit and caused long timeouts.
+- Pixeldrain playbackUrl is constructed locally from its resolved file ID.
+- External thumbnail localization runs in a small worker pool instead of
+  serially waiting on each host.
+- Failed thumbnail migrations are remembered for the current app session so a
+  dead host is not retried on every Rebuild/Build/Publish.
+- last_checked now uses the script's stable database timestamp rather than the
+  current time on every build, preventing index.json from changing needlessly.
 
-Validation:
-- Python syntax check passed.
+Git publishing improvements
+- Publish no longer performs a duplicate Build Index after Rebuild Library.
+- The second immediate 'git fetch' after publish preview is skipped. A rejected
+  push still performs the safe fetch/merge/retry path.
+- 'git add --renormalize .' is no longer run on every publish. It is only needed
+  when .gitattributes is first created.
+
+Previous optimization retained
+- Faster/batched EroScripts link extraction and selected downloads.
+- Reduced duplicate EroScripts association work.
+- Edit Video thumbnail work off the UI thread.
+- Staged Edit Video tag changes.
+- Diagnostic cleanup.
+- Strict supported-video URL validation.
+
+Validation
+- Python compile check passed.
 - Full test suite: 23 passed.

@@ -773,8 +773,10 @@ class LibraryGUI:
                         eroscripts_url_holder["value"],
                     )
 
+                # rebuild_library() already regenerates index.json. Calling
+                # build_index() again doubled thumbnail/index work and was a
+                # major source of save-time stalls.
                 self.application.rebuild_library()
-                self.application.build_index()
                 self.refresh_count()
                 self.set_status(
                     f"Imported {len(results_holder['value'])} funscript(s) from EroScripts."
@@ -864,7 +866,6 @@ class LibraryGUI:
                 copied += 1
 
             self.application.rebuild_library()
-            self.application.build_index()
             self.refresh_count()
             self.set_status(f"Added {copied} file(s); skipped {skipped} existing file(s).")
 
@@ -1028,7 +1029,6 @@ class LibraryGUI:
 
             try:
                 self.application.rebuild_library()
-                self.application.build_index()
                 self.refresh_count()
             except Exception as error:
                 finish_error(error)
@@ -1076,7 +1076,10 @@ class LibraryGUI:
 
                         def push_worker():
                             try:
-                                result = self.application.git_publish(message)
+                                result = self.application.git_publish(
+                                    message,
+                                    skip_initial_fetch=True,
+                                )
                                 self.root.after(0, lambda result=result: finish_success(result))
                             except Exception as error:
                                 self.root.after(0, lambda error=error: finish_error(error))

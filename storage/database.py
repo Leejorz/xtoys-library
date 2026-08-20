@@ -98,6 +98,12 @@ class Database:
             self.connection.execute(
                 "PRAGMA foreign_keys = ON"
             )
+            # WAL + NORMAL drastically reduces the cost of the many small
+            # metadata commits performed while saving/importing scripts, while
+            # retaining durable SQLite transactions.
+            self.connection.execute("PRAGMA journal_mode = WAL")
+            self.connection.execute("PRAGMA synchronous = NORMAL")
+            self.connection.execute("PRAGMA busy_timeout = 5000")
 
         return self.connection
 
