@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
+from core.pixeldrain import is_pixeldrain_host, resolve_pixeldrain_url
 from datetime import datetime
 import hashlib
 import re
@@ -267,7 +268,7 @@ class EroScriptsImporter:
                 result_candidates = [matched_video] if matched_video else []
                 if matched_video:
                     matched_video = dict(matched_video)
-                    detected_id = self._extract_video_id_from_url(matched_video.get("url"))
+                    detected_id = matched_video.get("video_id") or self._extract_video_id_from_url(matched_video.get("url"))
                     if detected_id:
                         matched_video["video_id"] = detected_id
                     result_video_site = matched_video.get("site")
@@ -357,7 +358,7 @@ class EroScriptsImporter:
                 result_candidates = [matched_video] if matched_video else []
                 if matched_video:
                     matched_video = dict(matched_video)
-                    detected_id = self._extract_video_id_from_url(matched_video.get("url"))
+                    detected_id = matched_video.get("video_id") or self._extract_video_id_from_url(matched_video.get("url"))
                     if detected_id:
                         matched_video["video_id"] = detected_id
                     result_video_site = matched_video.get("site")
@@ -1146,11 +1147,22 @@ class EroScriptsImporter:
         parsed = urlparse(video_url)
         path = parsed.path.rstrip("/")
         host = (parsed.hostname or "").lower().removeprefix("www.")
+        if is_pixeldrain_host(host):
+            resolved = resolve_pixeldrain_url(video_url)
+            return (resolved or {}).get("video_id")
         patterns = []
         if host == "spankbang.com":
             patterns.append(r"/([A-Za-z0-9_-]+)/video(?:/|$)")
         if host == "eporner.com":
             patterns.append(r"/video-([A-Za-z0-9_-]+)(?:/|$)")
+        if host == "hmvmania.com":
+            match = re.search(r"/video/([^/]+)(?:/|$)", path, re.I)
+            if match:
+                value = match.group(1)
+                fragment = parsed.fragment or ""
+                frag_query = fragment.split("?", 1)[1] if "?" in fragment else fragment
+                item = re.search(r"(?:^|&)videoId=([^&]+)", frag_query, re.I)
+                return value + ("#videoId=" + item.group(1) if item else "")
         patterns.extend((
             r"/video/(\d+)(?:/|$)",
             r"/video/([A-Za-z0-9_-]+)(?:/|$)",
@@ -1235,7 +1247,7 @@ class EroScriptsImporter:
             fallback = []
             supported_hosts = {
                 "eporner.com", "rule34video.com", "noodledude.io",
-                "spankbang.com", "pmvhaven.com",
+                "spankbang.com", "pmvhaven.com", "hmvmania.com", "pixeldrain.com",
             }
             for i in range(links.count()):
                 link = links.nth(i)
@@ -1249,12 +1261,23 @@ class EroScriptsImporter:
                 if host in {"discuss.eroscripts.com", "eroscripts.com"}:
                     continue
                 link_text = " ".join((link.inner_text(timeout=2000) or "").split()) or None
-                candidate = {
-                    "site": host,
-                    "title": link_text,
-                    "url": full_url,
-                    "source": "script-post-block",
-                }
+                if is_pixeldrain_host(host):
+                    resolved = resolve_pixeldrain_url(full_url) or {}
+                    host = "pixeldrain.com"
+                    candidate = {
+                        "site": host,
+                        "title": resolved.get("title") or link_text,
+                        "url": full_url,
+                        "video_id": resolved.get("video_id"),
+                        "source": "script-post-block",
+                    }
+                else:
+                    candidate = {
+                        "site": host,
+                        "title": link_text,
+                        "url": full_url,
+                        "source": "script-post-block",
+                    }
                 if host in supported_hosts or host.endswith(".noodledude.io"):
                     preferred.append(candidate)
                 elif link_text and re.match(r"https?://", link_text, re.I):
@@ -1292,7 +1315,16 @@ class EroScriptsImporter:
                     if not host or host in {"discuss.eroscripts.com", "eroscripts.com"}:
                         continue
                     text = " ".join((link.inner_text(timeout=2000) or "").split()) or None
-                    item = {"site": host, "title": text, "url": full_url}
+                    if is_pixeldrain_host(host):
+                        resolved = resolve_pixeldrain_url(full_url) or {}
+                        item = {
+                            "site": "pixeldrain.com",
+                            "title": resolved.get("title") or text,
+                            "url": full_url,
+                            "video_id": resolved.get("video_id"),
+                        }
+                    else:
+                        item = {"site": host, "title": text, "url": full_url}
                     if item not in candidates:
                         candidates.append(item)
         except Exception:

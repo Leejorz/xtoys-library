@@ -12,6 +12,8 @@ from urllib.request import Request, urlopen
 
 from PIL import Image
 
+from core.pixeldrain import resolve_pixeldrain_url
+
 
 class ThumbnailExtractor:
     """Best-effort video-source thumbnail extraction without changing the DB schema.
@@ -35,6 +37,12 @@ class ThumbnailExtractor:
         url = source_url.strip()
         if not re.match(r"^https?://", url, re.I):
             return None
+
+        # Pixeldrain exposes a dedicated thumbnail endpoint. For list URLs,
+        # resolve #item=N to the concrete file before building that endpoint.
+        resolved_pixeldrain = resolve_pixeldrain_url(url, timeout=timeout)
+        if resolved_pixeldrain and resolved_pixeldrain.get("thumbnail_url"):
+            return resolved_pixeldrain["thumbnail_url"]
 
         try:
             request = Request(

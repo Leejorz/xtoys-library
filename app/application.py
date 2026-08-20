@@ -12,6 +12,7 @@ from ui.menu import MainMenu
 from core.scanner import LibraryScanner
 from core.eroscripts import EroScriptsImporter
 from core.thumbnails import ThumbnailExtractor
+from core.pixeldrain import is_pixeldrain_host, resolve_pixeldrain_url
 from core.eroscripts_auth import EroScriptsAuth
 from builders.index_builder import IndexBuilder
 
@@ -1454,6 +1455,8 @@ class Application:
             "noodledude.io",
             "spankbang.com",
             "pmvhaven.com",
+            "hmvmania.com",
+            "pixeldrain.com",
         }
 
         # Treat supported-site subdomains such as cdn.noodledude.io as the
@@ -1461,6 +1464,19 @@ class Application:
         # always the configured xToys-compatible root domain.
         if host == "noodledude.io" or host.endswith(".noodledude.io"):
             host = "noodledude.io"
+
+        # Pixeldrain list URLs need their #item=N fragment resolved to the
+        # concrete file ID. Direct /u/<id> URLs are handled here too.
+        if is_pixeldrain_host(host):
+            resolved = resolve_pixeldrain_url(video_url)
+            if not resolved:
+                return None
+            return {
+                "site": "pixeldrain.com",
+                "url": video_url,
+                "title": resolved.get("title"),
+                "video_id": resolved.get("video_id") or "",
+            }
 
         if host not in supported:
             return None
@@ -1473,6 +1489,19 @@ class Application:
             match = re.search(r"/video-([A-Za-z0-9_-]+)(?:/|$)", path, re.I)
             if match:
                 video_id = match.group(1)
+
+        # HMVMania: /video/<slug>/#/?playlistId=0&videoId=0
+        # Keep the slug and, when present, the in-page video index so multiple
+        # playlist items never collapse into one library source.
+        if host == "hmvmania.com":
+            match = re.search(r"/video/([^/]+)(?:/|$)", path, re.I)
+            if match:
+                video_id = match.group(1)
+                fragment = parsed.fragment or ""
+                frag_query = fragment.split("?", 1)[1] if "?" in fragment else fragment
+                item = re.search(r"(?:^|&)videoId=([^&]+)", frag_query, re.I)
+                if item:
+                    video_id += "#videoId=" + item.group(1)
 
         # PMVHaven: /video/<title>_<hex-id>
         # The identifier is the final underscore-delimited component.

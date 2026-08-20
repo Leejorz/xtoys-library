@@ -141,7 +141,7 @@ class AppConfig:
                 str(site).strip().lower()
                 for site in video_sites.get(
                     "xtoys_supported_sites",
-                    ["eporner.com", "rule34video.com", "noodledude.io", "spankbang.com", "pmvhaven.com"]
+                    ["eporner.com", "rule34video.com", "noodledude.io", "spankbang.com", "pmvhaven.com", "hmvmania.com", "pixeldrain.com"]
                 )
                 if str(site).strip()
             ),
