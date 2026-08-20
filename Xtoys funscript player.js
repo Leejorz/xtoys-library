@@ -3332,19 +3332,8 @@ function isExternalVideoSite(site) {
     var value = (site || "").toLowerCase();
     return value == "pixeldrain" || value == "pixeldrain.com" ||
         value == "hmvmania" || value == "hmvmania.com" ||
-        value == "pmvhaven" || value == "pmvhaven.com";
-}
-
-function loadDirectUrlVideo(url) {
-    console.log("Loading direct video URL: " + url);
-    callAction({
-        part: "video",
-        site: "other",
-        type: "updateTease",
-        url: url,
-        video: url,
-        source: "url",
-    }, true);
+        value == "pmvhaven" || value == "pmvhaven.com" ||
+        value == "rule34video" || value == "rule34video.com";
 }
 
 function loadVideo() {
@@ -3352,20 +3341,13 @@ function loadVideo() {
     console.log("Loading video: " + JSON.stringify(video));
 
     if (video && isExternalVideoSite(video.site)) {
-        console.log("External video source detected: " + video.site + " / " + video.id);
-
-        // The library manager resolves these sites to a direct media URL.
-        // Feed that URL to xToys as a generic URL video so normal video-start
-        // triggers drive the funscript exactly like built-in sites.
-        if (video.playbackUrl) {
-            loadDirectUrlVideo(video.playbackUrl);
-            return;
+        console.log("External/manual video source detected: " + video.site + " / " + video.id);
+        var source = video.sourceUrl || video.url || "";
+        var message = "This host cannot be embedded by the xToys tease video action. Open the source separately, start it at 0:00, then press Start manually.";
+        if (source) {
+            message += " Source: " + source;
         }
-
-        // If a host changed its page/player markup and the manager could not
-        // resolve a direct media URL, remain safe and usable via manual sync.
-        console.log("No direct playback URL available; waiting for manual start.");
-        statusText("Direct video URL unavailable. Open the source separately and press Start manually.");
+        statusText(message);
         return;
     }
 

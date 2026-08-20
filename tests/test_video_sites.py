@@ -31,3 +31,24 @@ def test_new_site_index_aliases():
     assert IndexBuilder.normalize_site("pmvhaven.com") == "pmvhaven"
     assert IndexBuilder.normalize_site("hmvmania.com") == "hmvmania"
     assert IndexBuilder.normalize_site("pixeldrain.com") == "pixeldrain"
+
+
+def test_rule34_only_accepts_real_video_pages():
+    from core.eroscripts import EroScriptsImporter
+    assert EroScriptsImporter._is_supported_video_page_url(
+        "rule34video.com", "/video/3474969/get-wild-theobrobine-hmv/"
+    )
+    assert not EroScriptsImporter._is_supported_video_page_url(
+        "rule34video.com", "/members/2228262/"
+    )
+    assert not EroScriptsImporter._is_supported_video_page_url(
+        "rule34video.com", "/tags/hmv/"
+    )
+
+
+def test_external_sites_require_video_paths_where_applicable():
+    from core.eroscripts import EroScriptsImporter
+    assert EroScriptsImporter._is_supported_video_page_url("pmvhaven.com", "/video/example_123")
+    assert not EroScriptsImporter._is_supported_video_page_url("pmvhaven.com", "/users/example")
+    assert EroScriptsImporter._is_supported_video_page_url("hmvmania.com", "/video/example/")
+    assert not EroScriptsImporter._is_supported_video_page_url("hmvmania.com", "/category/hmv/")
