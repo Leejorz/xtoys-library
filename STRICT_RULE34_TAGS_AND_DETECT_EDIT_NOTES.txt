@@ -1,0 +1,22 @@
+xToys Library Manager patch
+
+Built from the latest uploaded xtoys-library - Copy.zip.
+
+Changes:
+- Rule34Video tag extraction is now strict and per-video.
+- Only links inside the explicit Rule34Video Tags row are accepted.
+- Broad meta keywords, navigation tags, categories, artist links, recommendations,
+  and tags elsewhere on the page are ignored.
+- Meaningful explicit Rule34 tags such as PMV/HMV are preserved.
+- If the explicit Tags row cannot be isolated, that funscript falls back to its
+  own EroScripts tags rather than accepting loose guesses.
+- Download & Detect now supports double-clicking any funscript row to edit its
+  detected video source before continuing.
+- The editor detects the new site/video ID, applies it in memory, then refreshes
+  only that funscript's tags and thumbnail from the corrected source.
+- Original per-funscript EroScripts tags are retained as a fallback for a manual
+  source correction.
+
+Validation:
+- Python compile check passed.
+- Full test suite: 30 passed.

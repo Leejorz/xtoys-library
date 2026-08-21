@@ -6,6 +6,7 @@ import tkinter as tk
 from pathlib import Path
 
 from core.thumbnails import ThumbnailExtractor
+from core.video_metadata import VideoMetadataExtractor
 from tkinter import filedialog, messagebox, ttk
 
 
@@ -166,11 +167,20 @@ class LibraryGUI:
         current_page = {"value": None}
         results_holder = {"value": []}
         missing_holder = {"value": []}
-        eroscripts_url_holder = {"value": ""}
+        eroscripts_url_holder = {"value": []}
         selected_import_tags_holder = {"value": []}
         fallback_vars = {}
         discovered_holder = {"value": []}
         discovery_vars = []
+
+        def cancel_import():
+            try:
+                self.application.discard_staged_eroscripts_results(results_holder["value"])
+            except Exception:
+                pass
+            window.destroy()
+
+        window.protocol("WM_DELETE_WINDOW", cancel_import)
 
         def show_page(name):
             for frame in pages.values():
@@ -190,15 +200,15 @@ class LibraryGUI:
         ttk.Label(page1, text="Add Funscript", font=("TkDefaultFont", 16, "bold")).pack(anchor="w", pady=(0, 8))
         ttk.Label(
             page1,
-            text="Enter the EroScripts page URL. The app will download the funscript and attempt to detect its video source automatically.",
+            text=("Paste one or more EroScripts topic URLs, one per line. The app will scan all topics, "
+                  "combine their funscripts into one selection list, and keep each script tied to its own topic/video."),
             wraplength=640,
         ).pack(anchor="w", pady=(0, 18))
 
-        url_frame = ttk.LabelFrame(page1, text="EroScripts page", padding=12)
+        url_frame = ttk.LabelFrame(page1, text="EroScripts pages (one URL per line)", padding=12)
         url_frame.pack(fill="x", pady=(0, 18))
-        url_var = tk.StringVar()
-        url_entry = self._add_text_context_menu(ttk.Entry(url_frame, textvariable=url_var))
-        url_entry.pack(fill="x")
+        url_entry = self._add_text_context_menu(tk.Text(url_frame, height=6, wrap="none"))
+        url_entry.pack(fill="both", expand=True)
 
         page1_status = tk.StringVar(value="")
         ttk.Label(page1, textvariable=page1_status).pack(anchor="w", pady=(0, 12))
@@ -211,7 +221,7 @@ class LibraryGUI:
             text="Choose Local Funscript Files",
             command=lambda: (window.destroy(), self.add_local_funscripts()),
         ).pack(side="left", padx=(10, 0))
-        ttk.Button(page1_buttons, text="Cancel", command=window.destroy).pack(side="right")
+        ttk.Button(page1_buttons, text="Cancel", command=cancel_import).pack(side="right")
 
         # ------------------------------------------------------------
         # Page 2: Download + automatic detection
@@ -274,6 +284,93 @@ class LibraryGUI:
             detection_tree.column(column, width=width, anchor="w")
         detection_tree.pack(fill="both", expand=True)
         detection_frame.pack_forget()
+        detection_result_by_item = {}
+
+        def edit_detected_video_source(_event=None):
+            selection = detection_tree.selection()
+            if not selection:
+                return
+            item_id = selection[0]
+            result = detection_result_by_item.get(item_id)
+            if result is None:
+                return
+
+            dialog = tk.Toplevel(window)
+            dialog.title(f"Edit Video Source - {result.filename}")
+            dialog.transient(window)
+            dialog.grab_set()
+            dialog.geometry("650x190")
+            dialog.minsize(540, 180)
+
+            body = ttk.Frame(dialog, padding=14)
+            body.pack(fill="both", expand=True)
+            ttk.Label(body, text=result.filename, font=("TkDefaultFont", 11, "bold")).pack(anchor="w")
+            ttk.Label(body, text="Video Source URL:").pack(anchor="w", pady=(12, 3))
+            url_var = tk.StringVar(value=getattr(result, "video_url", None) or "")
+            entry = self._add_text_context_menu(ttk.Entry(body, textvariable=url_var))
+            entry.pack(fill="x")
+            status_var = tk.StringVar(value="Paste a supported video URL, then click Detect & Apply.")
+            ttk.Label(body, textvariable=status_var, wraplength=610).pack(anchor="w", pady=(8, 8))
+
+            buttons = ttk.Frame(body)
+            buttons.pack(fill="x")
+            apply_button = ttk.Button(buttons, text="Detect & Apply")
+            apply_button.pack(side="left")
+            ttk.Button(buttons, text="Cancel", command=dialog.destroy).pack(side="right")
+
+            def finish_metadata(candidate, metadata):
+                try:
+                    fallback = list(getattr(result, "eroscripts_tags", []) or [])
+                    source_tags = list(getattr(metadata, "tags", []) or []) if metadata else []
+                    result.tags = source_tags or fallback or list(getattr(result, "tags", []) or [])
+                    thumb = getattr(metadata, "thumbnail_url", None) if metadata else None
+                    if thumb:
+                        result.thumbnail_url = thumb
+                    detection_tree.item(
+                        item_id,
+                        values=(result.filename, result.video_site or "—", result.video_id or "—", "Edited"),
+                    )
+                    dialog.destroy()
+                except tk.TclError:
+                    pass
+
+            def metadata_failed(candidate):
+                finish_metadata(candidate, None)
+
+            def apply_source():
+                value = url_var.get().strip()
+                candidate = self.application.detect_video_source(value) if value else None
+                if not candidate:
+                    status_var.set("Could not detect a supported site / video ID from that URL.")
+                    return
+                try:
+                    # Keep this button fast: network metadata refresh runs on a
+                    # worker, while source detection/application is local.
+                    self.application.apply_detected_video_source(result, candidate, fetch_thumbnail=False)
+                except Exception as exc:
+                    status_var.set(str(exc))
+                    return
+
+                apply_button.config(state="disabled")
+                entry.config(state="disabled")
+                status_var.set(
+                    f"Detected {candidate['site']} | Video ID: {candidate['video_id']} — refreshing tags/thumbnail..."
+                )
+
+                def worker():
+                    try:
+                        metadata = VideoMetadataExtractor.fetch(candidate.get("url"), 6.0)
+                        self.root.after(0, lambda: finish_metadata(candidate, metadata))
+                    except Exception:
+                        self.root.after(0, lambda: metadata_failed(candidate))
+
+                threading.Thread(target=worker, daemon=True).start()
+
+            apply_button.config(command=apply_source)
+            entry.bind("<Return>", lambda _e: apply_source())
+            entry.focus_set()
+
+        detection_tree.bind("<Double-1>", edit_detected_video_source, add="+")
 
         def set_all_discovered():
             value = bool(select_all_var.get())
@@ -304,7 +401,7 @@ class LibraryGUI:
         download_selected_button.pack(side="left")
         detect_next_button = ttk.Button(page2_buttons, text="Continue", state="disabled")
         detect_next_button.pack(side="left", padx=(8, 0))
-        ttk.Button(page2_buttons, text="Cancel", command=window.destroy).pack(side="right")
+        ttk.Button(page2_buttons, text="Cancel", command=cancel_import).pack(side="right")
 
         # ------------------------------------------------------------
         # Page 3: automatic tag selector
@@ -314,8 +411,9 @@ class LibraryGUI:
         ttk.Label(
             page_tags,
             text=(
-                "EroScripts tags are detected automatically. Select the tags "
-                "you want to keep for this import. Preset tags can also be added."
+                "Each funscript now keeps its own tag set from its matched video page. "
+                "Select which detected tag names are allowed to remain where they were found. "
+                "Selected preset tags are added to every imported script."
             ),
             wraplength=640,
         ).pack(anchor="w", pady=(0, 12))
@@ -324,7 +422,7 @@ class LibraryGUI:
         tag_page_container.pack(fill="both", expand=True)
 
         detected_tags_frame = ttk.LabelFrame(
-            tag_page_container, text="Detected EroScripts Tags", padding=8
+            tag_page_container, text="Detected per-funscript video tags", padding=8
         )
         detected_tags_frame.pack(side="left", fill="both", expand=True, padx=(0, 8))
 
@@ -362,7 +460,7 @@ class LibraryGUI:
         tag_page_buttons.pack(fill="x", side="bottom")
         tag_continue_button = ttk.Button(tag_page_buttons, text="Continue")
         tag_continue_button.pack(side="left")
-        ttk.Button(tag_page_buttons, text="Cancel", command=window.destroy).pack(side="right")
+        ttk.Button(tag_page_buttons, text="Cancel", command=cancel_import).pack(side="right")
 
         # ------------------------------------------------------------
         # Page 4: fallback source selection
@@ -428,7 +526,7 @@ class LibraryGUI:
         page3_buttons.pack(fill="x", side="bottom")
         fallback_save_button = ttk.Button(page3_buttons, text="Continue to Save")
         fallback_save_button.pack(side="left")
-        ttk.Button(page3_buttons, text="Cancel", command=window.destroy).pack(side="right")
+        ttk.Button(page3_buttons, text="Cancel", command=cancel_import).pack(side="right")
 
         # ------------------------------------------------------------
         # Page 4: review + save
@@ -511,7 +609,7 @@ class LibraryGUI:
         page4_buttons.pack(fill="x", side="bottom")
         save_button = ttk.Button(page4_buttons, text="Save to Library")
         save_button.pack(side="left")
-        ttk.Button(page4_buttons, text="Cancel", command=window.destroy).pack(side="right")
+        ttk.Button(page4_buttons, text="Cancel", command=cancel_import).pack(side="right")
 
         def populate_tag_page(results):
             detected_tags_list.delete(0, "end")
@@ -542,21 +640,34 @@ class LibraryGUI:
             show_page("tags")
 
         def apply_selected_import_tags():
-            selected = [detected_tags_list.get(i) for i in detected_tags_list.curselection()]
-            selected.extend(preset_tags_list.get(i) for i in preset_tags_list.curselection())
+            allowed_detected = {
+                detected_tags_list.get(i).strip().casefold()
+                for i in detected_tags_list.curselection()
+                if detected_tags_list.get(i).strip()
+            }
+            presets = [preset_tags_list.get(i).strip() for i in preset_tags_list.curselection()]
+            presets = [tag for tag in presets if tag]
 
-            cleaned = []
-            seen = set()
-            for tag in selected:
-                clean = str(tag).strip()
-                key = clean.casefold()
-                if clean and key not in seen:
-                    seen.add(key)
-                    cleaned.append(clean)
-
-            selected_import_tags_holder["value"] = cleaned
+            # Preserve each result's own source tags. The union shown in the UI
+            # is only a global allow/filter list; it is never copied wholesale
+            # onto every funscript. Presets are the only intentional global add.
             for result in results_holder["value"]:
-                result.tags = list(cleaned)
+                kept = []
+                seen = set()
+                for tag in list(getattr(result, "tags", []) or []):
+                    clean = str(tag).strip()
+                    key = clean.casefold()
+                    if clean and key in allowed_detected and key not in seen:
+                        seen.add(key)
+                        kept.append(clean)
+                for tag in presets:
+                    key = tag.casefold()
+                    if key not in seen:
+                        seen.add(key)
+                        kept.append(tag)
+                result.tags = kept
+
+            selected_import_tags_holder["value"] = presets
 
             missing = missing_holder["value"]
             if missing:
@@ -575,9 +686,10 @@ class LibraryGUI:
             for candidate in discovered_holder["value"]:
                 var = tk.BooleanVar(value=True)
                 discovery_vars.append((candidate, var))
+                topic_label = candidate.get("topic_title") or candidate.get("page_url") or "EroScripts"
                 row = ttk.Checkbutton(
                     selection_list_frame,
-                    text=candidate.get("filename", "Unnamed funscript"),
+                    text=f"{candidate.get('filename', 'Unnamed funscript')}   —   {topic_label}",
                     variable=var,
                     command=update_select_all_state,
                 )
@@ -618,11 +730,9 @@ class LibraryGUI:
 
             def worker():
                 try:
-                    results = self.application.import_selected_eroscripts(
-                        eroscripts_url_holder["value"], selected, persist=False
+                    results = self.application.import_selected_eroscripts_many(
+                        selected, persist=False
                     )
-                    for result in results:
-                        self.application.prepare_video_source(result)
                     self.root.after(0, lambda results=results: import_finished(results))
                 except Exception as error:
                     self.root.after(0, lambda error=error: import_failed(error))
@@ -636,6 +746,7 @@ class LibraryGUI:
             detection_frame.pack(fill="both", expand=True, pady=(0, 14))
             for item in detection_tree.get_children():
                 detection_tree.delete(item)
+            detection_result_by_item.clear()
 
             missing = []
             for result in results:
@@ -646,15 +757,18 @@ class LibraryGUI:
                 else:
                     status = "Needs source"
                     missing.append(result)
-                detection_tree.insert("", "end", values=(result.filename, site or "—", video_id or "—", status))
+                item_id = detection_tree.insert(
+                    "", "end", values=(result.filename, site or "—", video_id or "—", status)
+                )
+                detection_result_by_item[item_id] = result
 
             missing_holder["value"] = missing
             if missing:
                 detection_status.set("Automatic detection finished. Some video sources need your input.")
-                page2_status.set(f"{len(missing)} funscript(s) need a video source.")
+                page2_status.set(f"{len(missing)} funscript(s) need a video source. Double-click any row to edit it.")
             else:
                 detection_status.set("Automatic detection succeeded for all imported funscripts.")
-                page2_status.set("All video sources detected automatically.")
+                page2_status.set("All video sources detected automatically. Double-click a row to edit its video source.")
 
             detect_next_button.config(
                 state="normal",
@@ -749,8 +863,8 @@ class LibraryGUI:
                     f"Thumbnail: {getattr(result, 'thumbnail_url', None) or '—'}\n\n",
                 )
             save_text.config(state="disabled")
-            rebuild_import_tag_selector(results_holder["value"])
-            save_status.set(f"Ready to save {len(results_holder['value'])} funscript(s).")
+            import_tag_frame.pack_forget()
+            save_status.set(f"Ready to save {len(results_holder['value'])} funscript(s). Tags shown above remain per funscript.")
             show_page("save")
 
         def save_import():
@@ -762,29 +876,26 @@ class LibraryGUI:
                 # IMPORTANT: database work is intentionally performed on the
                 # Tkinter/main thread. The background worker only uses
                 # Playwright and returns plain result objects.
-                selected_tags = [
-                    tag for tag, var in import_tag_vars.items()
-                    if var.get()
-                ]
-                for result in results_holder["value"]:
-                    result.tags = list(selected_tags)
-                    self.application.save_eroscripts_import(
-                        result,
-                        eroscripts_url_holder["value"],
-                    )
+                import_count = len(results_holder["value"])
+                self.application.save_eroscripts_import_batch(results_holder["value"])
 
-                # rebuild_library() already regenerates index.json. Calling
-                # build_index() again doubled thumbnail/index work and was a
-                # major source of save-time stalls.
+                # Drop staged content/result references before the expensive
+                # rebuild so mass imports have the lowest possible peak memory.
+                results_holder["value"] = []
+                try:
+                    import gc
+                    gc.collect()
+                except Exception:
+                    pass
+
+                # rebuild_library() already regenerates index.json.
                 self.application.rebuild_library()
                 self.refresh_count()
-                self.set_status(
-                    f"Imported {len(results_holder['value'])} funscript(s) from EroScripts."
-                )
+                self.set_status(f"Imported {import_count} funscript(s) from EroScripts.")
                 window.destroy()
                 messagebox.showinfo(
                     "Import Complete",
-                    f"Imported: {len(results_holder['value'])} funscript(s).\n\nLibrary and index.json were rebuilt.",
+                    f"Imported: {import_count} funscript(s).\n\nLibrary and index.json were rebuilt.",
                     parent=self.root,
                 )
             except Exception as error:
@@ -796,24 +907,25 @@ class LibraryGUI:
         save_button.config(command=save_import)
 
         def start_import():
-            url = url_var.get().strip()
-            if not url:
-                messagebox.showwarning("EroScripts URL Required", "Paste an EroScripts page URL first.", parent=window)
+            raw_urls = url_entry.get("1.0", "end").strip()
+            urls = self.application._clean_eroscripts_urls(raw_urls)
+            if not urls:
+                messagebox.showwarning("EroScripts URL Required", "Paste at least one EroScripts page URL first.", parent=window)
                 return
 
-            eroscripts_url_holder["value"] = url
-            page1_status.set("Starting discovery...")
+            eroscripts_url_holder["value"] = urls
+            page1_status.set(f"Starting discovery for {len(urls)} topic(s)...")
             show_page("detect")
             selection_frame.pack(fill="both", expand=True, pady=(0, 14))
             detection_frame.pack_forget()
             detection_status.set("Detecting available funscripts. No files are being downloaded yet...")
-            page2_status.set("Scanning the EroScripts page and expanded dropdown sections.")
+            page2_status.set(f"Scanning {len(urls)} EroScripts topic(s) and expanded dropdown sections.")
             download_selected_button.config(state="disabled")
             detect_next_button.config(state="disabled")
 
             def worker():
                 try:
-                    candidates = self.application.discover_eroscripts(url)
+                    candidates = self.application.discover_eroscripts_many(urls)
                     self.root.after(0, lambda candidates=candidates: populate_discovery_page(candidates))
                 except Exception as error:
                     self.root.after(0, lambda error=error: import_failed(error))
@@ -828,6 +940,8 @@ class LibraryGUI:
             populate_detection_page(results_holder["value"])
 
         def import_failed(error):
+            self.application.discard_staged_eroscripts_results(results_holder["value"])
+            results_holder["value"] = []
             self.set_status("EroScripts import failed")
             messagebox.showerror("Import Funscript Failed", str(error), parent=window)
             show_page("input")

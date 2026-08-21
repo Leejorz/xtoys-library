@@ -13,6 +13,7 @@ from core.scanner import LibraryScanner
 from core.eroscripts import EroScriptsImporter
 from core.thumbnails import ThumbnailExtractor
 from core.pixeldrain import is_pixeldrain_host, resolve_pixeldrain_url
+from core.video_metadata import VideoMetadataExtractor
 from core.eroscripts_auth import EroScriptsAuth
 from builders.index_builder import IndexBuilder
 
@@ -1050,6 +1051,195 @@ class Application:
             source_url=source_url
         )
 
+    @staticmethod
+    def _clean_eroscripts_urls(urls) -> list[str]:
+        """Normalize a pasted one-per-line EroScripts URL list."""
+        if isinstance(urls, str):
+            values = re.split(r"[\r\n]+", urls)
+        else:
+            values = list(urls or [])
+        cleaned = []
+        seen = set()
+        for value in values:
+            url = Application.normalize_url(str(value or "")).strip()
+            if not url:
+                continue
+            key = url.casefold()
+            if key not in seen:
+                seen.add(key)
+                cleaned.append(url)
+        return cleaned
+
+    def discover_eroscripts_many(self, urls) -> list[dict]:
+        """Discover multiple EroScripts topics in one persistent browser session.
+
+        Topics are processed sequentially to keep Playwright memory bounded. A
+        failure on one topic is returned as a synthetic error row only when no
+        other topic succeeds; otherwise successful topics remain usable.
+        """
+        url_list = self._clean_eroscripts_urls(urls)
+        if not url_list:
+            return []
+        auth = EroScriptsAuth(self.root)
+        results = []
+        errors = []
+        try:
+            auth.start()
+            if auth.context is None:
+                raise RuntimeError("Could not start the EroScripts browser session.")
+            importer = EroScriptsImporter(auth.context, self.root)
+            for number, url in enumerate(url_list, 1):
+                try:
+                    print(f"[IMPORT] Discovering topic {number}/{len(url_list)}: {url}")
+                    results.extend(importer.discover_from_url(url))
+                except Exception as exc:
+                    errors.append(f"{url}: {exc}")
+                finally:
+                    # Playwright/Chromium can retain page objects for a while;
+                    # a collection point between topics keeps large queues tame.
+                    try:
+                        import gc
+                        gc.collect()
+                    except Exception:
+                        pass
+            if not results and errors:
+                raise RuntimeError("No EroScripts topics could be scanned:\n" + "\n".join(errors))
+            if errors:
+                print("[IMPORT] Some topics could not be scanned:")
+                for error in errors:
+                    print(f"[IMPORT]   {error}")
+            return results
+        finally:
+            auth.close()
+
+    def _enrich_import_results_from_video_sources(self, results) -> None:
+        """Give each funscript its own video-page tags and thumbnail.
+
+        EroScripts topic tags stay attached to each result as a fallback. Remote
+        metadata reads are bounded, deduplicated by source URL, and use a tiny
+        worker pool so a mass import cannot spawn dozens of requests at once.
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        items = list(results or [])
+        if not items:
+            return
+
+        # Preserve the per-result EroScripts fallback before enrichment.
+        fallbacks = {id(result): list(getattr(result, "tags", []) or []) for result in items}
+        for result in items:
+            # Keep the original per-funscript EroScripts fallback available if
+            # the user corrects the detected video source in the wizard.
+            result.eroscripts_tags = list(fallbacks[id(result)])
+        by_url = {}
+        for result in items:
+            url = self.normalize_url(getattr(result, "video_url", None))
+            if url:
+                by_url.setdefault(url, []).append(result)
+
+        metadata_by_url = {}
+        with ThreadPoolExecutor(max_workers=min(3, max(1, len(by_url)))) as pool:
+            future_map = {
+                pool.submit(VideoMetadataExtractor.fetch, url, 6.0): url
+                for url in by_url
+            }
+            for future in as_completed(future_map):
+                url = future_map[future]
+                try:
+                    metadata_by_url[url] = future.result()
+                except Exception:
+                    metadata_by_url[url] = None
+
+        for result in items:
+            url = self.normalize_url(getattr(result, "video_url", None))
+            metadata = metadata_by_url.get(url) if url else None
+            source_tags = list(getattr(metadata, "tags", []) or []) if metadata else []
+            # Crucial behavior: tags are assigned per funscript. Never union tags
+            # across a topic/batch. Only this result's source can replace its tags.
+            result.tags = source_tags or fallbacks[id(result)]
+            thumb = getattr(metadata, "thumbnail_url", None) if metadata else None
+            if thumb:
+                result.thumbnail_url = thumb
+
+    def import_selected_eroscripts_many(self, selected, persist: bool = False):
+        """Download a mixed selection spanning multiple EroScripts topics.
+
+        One browser/login context is reused. Each topic is downloaded
+        sequentially, while attachment downloads inside a topic keep the small
+        bounded batching already used by the importer. GUI imports stage bytes
+        on disk instead of retaining every funscript in RAM.
+        """
+        selected = list(selected or [])
+        if not selected:
+            return []
+        grouped = {}
+        order = []
+        for item in selected:
+            page_url = self.normalize_url(item.get("page_url") if isinstance(item, dict) else "")
+            if not page_url:
+                continue
+            if page_url not in grouped:
+                grouped[page_url] = []
+                order.append(page_url)
+            grouped[page_url].append(item)
+        if not grouped:
+            raise ValueError("Selected funscripts are missing their EroScripts page URLs.")
+
+        auth = EroScriptsAuth(self.root)
+        all_results = []
+        failures = []
+        staging_root = self.root / "cache" / "import_staging"
+        try:
+            auth.start()
+            if auth.context is None:
+                raise RuntimeError("Could not start the EroScripts browser session.")
+            importer = EroScriptsImporter(auth.context, self.root)
+            destination = self.root / self.config.funscripts_dir
+            for number, page_url in enumerate(order, 1):
+                try:
+                    print(f"[IMPORT] Downloading topic {number}/{len(order)}: {page_url}")
+                    topic_results = importer.import_selected_from_url(
+                        page_url, destination, grouped[page_url],
+                        write_files=persist,
+                        staging_dir=(None if persist else staging_root),
+                    )
+                    for result in topic_results:
+                        self.prepare_video_source(result, fetch_thumbnail=False)
+                    all_results.extend(topic_results)
+                except Exception as exc:
+                    failures.append(f"{page_url}: {exc}")
+                finally:
+                    try:
+                        import gc
+                        gc.collect()
+                    except Exception:
+                        pass
+            if not all_results and failures:
+                raise RuntimeError("All selected EroScripts topics failed:\n" + "\n".join(failures))
+            if failures:
+                print("[IMPORT] Some selected topics failed and were skipped:")
+                for failure in failures:
+                    print(f"[IMPORT]   {failure}")
+
+            self._enrich_import_results_from_video_sources(all_results)
+
+            if persist:
+                self.save_eroscripts_import_batch(all_results)
+            return all_results
+        finally:
+            auth.close()
+
+    def discard_staged_eroscripts_results(self, results) -> None:
+        """Delete temporary staged files when an import wizard is cancelled."""
+        for result in list(results or []):
+            path = getattr(result, "staged_path", None)
+            if path:
+                try:
+                    Path(path).unlink(missing_ok=True)
+                except OSError:
+                    pass
+                result.staged_path = None
+
     def discover_eroscripts(self, url: str):
         """Discover EroScripts funscripts without downloading them."""
         auth = EroScriptsAuth(self.root)
@@ -1152,7 +1342,7 @@ class Application:
         finally:
             auth.close()
 
-    def prepare_video_source(self, result) -> bool:
+    def prepare_video_source(self, result, fetch_thumbnail: bool = True) -> bool:
         """Attempt automatic source detection without prompting or DB access.
 
         Returns True when a supported source was found and applied to the
@@ -1164,7 +1354,7 @@ class Application:
             url = candidate.get("url") if isinstance(candidate, dict) else None
             detected = self.detect_video_source(url)
             if detected:
-                self.apply_detected_video_source(result, detected)
+                self.apply_detected_video_source(result, detected, fetch_thumbnail=fetch_thumbnail)
                 return True
 
         # Some importer results may already contain a video URL even if the
@@ -1172,7 +1362,7 @@ class Application:
         existing_url = getattr(result, "video_url", None)
         detected = self.detect_video_source(existing_url)
         if detected:
-            self.apply_detected_video_source(result, detected)
+            self.apply_detected_video_source(result, detected, fetch_thumbnail=fetch_thumbnail)
             return True
 
         result.video_site = None
@@ -1181,7 +1371,7 @@ class Application:
         result.video_id = None
         return False
 
-    def apply_detected_video_source(self, result, candidate: dict) -> None:
+    def apply_detected_video_source(self, result, candidate: dict, fetch_thumbnail: bool = True) -> None:
         """Apply a known supported source to an in-memory import result."""
         site = (candidate.get("site") or "").strip().lower()
         url = self.normalize_url(candidate.get("url") or "")
@@ -1201,9 +1391,10 @@ class Application:
         result.video_url = url
         result.video_id = video_id
 
-        source_thumbnail = ThumbnailExtractor.fetch(url)
-        if source_thumbnail:
-            result.thumbnail_url = source_thumbnail
+        if fetch_thumbnail:
+            source_thumbnail = ThumbnailExtractor.fetch(url)
+            if source_thumbnail:
+                result.thumbnail_url = source_thumbnail
 
     def apply_placeholder_video_source(self, result) -> None:
         """Apply the project's fixed placeholder source to an import result."""
@@ -1407,6 +1598,28 @@ class Application:
             f"{Application.PLACEHOLDER_VIDEO_URL}"
         )
 
+    def save_eroscripts_import_batch(self, results) -> None:
+        """Persist a large GUI import with one SQLite transaction.
+
+        Staged funscripts are moved into the library one at a time and their RAM
+        buffers are released immediately. This substantially lowers peak memory
+        during mass imports and cuts hundreds of SQLite fsyncs down to one.
+        """
+        items = list(results or [])
+        if not items:
+            return
+        with self.database.batch_writes():
+            for index, result in enumerate(items, 1):
+                self.save_eroscripts_import(result, getattr(result, "page_url", ""))
+                # Release potentially large bytes as soon as this item is durable.
+                result.content = b""
+                if index % 20 == 0:
+                    try:
+                        import gc
+                        gc.collect()
+                    except Exception:
+                        pass
+
     def save_eroscripts_import(
         self,
         result,
@@ -1423,7 +1636,19 @@ class Application:
         destination = self.root / self.config.funscripts_dir
         destination.mkdir(parents=True, exist_ok=True)
         output_path = destination / result.filename
-        output_path.write_bytes(result.content)
+        staged_path = getattr(result, "staged_path", None)
+        if staged_path and Path(staged_path).exists():
+            import shutil
+            staged_file = Path(staged_path)
+            try:
+                shutil.move(str(staged_file), str(output_path))
+            except Exception:
+                # Cross-device moves or AV locks can fail; copy is the safe fallback.
+                shutil.copy2(staged_file, output_path)
+                staged_file.unlink(missing_ok=True)
+            result.staged_path = None
+        else:
+            output_path.write_bytes(result.content)
 
         content_hash = result.content_hash
 

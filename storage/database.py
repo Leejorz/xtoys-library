@@ -77,6 +77,8 @@ class Database:
     ):
         self.path = path
         self.connection = None
+        self._batch_depth = 0
+        self._batch_failed = False
 
     def connect(self):
 
@@ -107,6 +109,42 @@ class Database:
 
         return self.connection
 
+    def _maybe_commit(self) -> None:
+        if self._batch_depth == 0 and self.connection is not None:
+            self.connection.commit()
+
+    class _BatchWrites:
+        def __init__(self, database):
+            self.database = database
+
+        def __enter__(self):
+            db = self.database
+            db.connect()
+            if db._batch_depth == 0:
+                db._batch_failed = False
+                db.connection.execute("BEGIN")
+            db._batch_depth += 1
+            return db
+
+        def __exit__(self, exc_type, exc, tb):
+            db = self.database
+            db._batch_depth = max(0, db._batch_depth - 1)
+            if exc_type is not None:
+                db._batch_failed = True
+            if db._batch_depth == 0:
+                try:
+                    if db._batch_failed:
+                        db.connection.rollback()
+                    else:
+                        db.connection.commit()
+                finally:
+                    db._batch_failed = False
+            return False
+
+    def batch_writes(self):
+        """Group many metadata updates into one SQLite transaction."""
+        return self._BatchWrites(self)
+
     def initialize(self):
 
         connection = self.connect()
@@ -117,7 +155,7 @@ class Database:
 
         self.migrate()
 
-        connection.commit()
+        self._maybe_commit()
 
     def migrate(self):
 
@@ -189,7 +227,7 @@ class Database:
             "UPDATE scripts SET thumbnail=?, updated_at=datetime('now') WHERE id=?",
             (thumbnail or "", script_id),
         )
-        self.connection.commit()
+        self._maybe_commit()
 
     def update_filename(
         self,
@@ -208,7 +246,7 @@ class Database:
             )
         )
 
-        self.connection.commit()
+        self._maybe_commit()
 
     def add_script(
         self,
@@ -238,7 +276,7 @@ class Database:
             )
         )
 
-        self.connection.commit()
+        self._maybe_commit()
 
     def add_script_metadata(
         self,
@@ -288,7 +326,7 @@ class Database:
             )
         )
 
-        self.connection.commit()
+        self._maybe_commit()
 
         return cursor.lastrowid
 
@@ -326,7 +364,7 @@ class Database:
             )
         )
 
-        self.connection.commit()
+        self._maybe_commit()
 
     def get_or_create_tag(
         self,
@@ -361,7 +399,7 @@ class Database:
             (name,)
         ).fetchone()
 
-        self.connection.commit()
+        self._maybe_commit()
 
         return row["id"]
 
@@ -422,7 +460,7 @@ class Database:
                     )
                 )
 
-        connection.commit()
+        self._maybe_commit()
 
     @staticmethod
     def normalize_url(
@@ -709,7 +747,7 @@ class Database:
                 )
             )
 
-        connection.commit()
+        self._maybe_commit()
 
     def upsert_eroscripts_thread(
         self,
@@ -772,7 +810,7 @@ class Database:
                 )
             )
 
-        connection.commit()
+        self._maybe_commit()
 
     def get_tags_for_script(
         self,
@@ -902,7 +940,7 @@ class Database:
             )
         )
 
-        connection.commit()
+        self._maybe_commit()
 
     def get_video_source(
         self,
@@ -1000,7 +1038,7 @@ class Database:
                 """
             )
 
-            connection.commit()
+            self._maybe_commit()
 
         except Exception:
             connection.rollback()
@@ -1063,7 +1101,7 @@ class Database:
             )
             counts["tags"] = cursor.rowcount
 
-            connection.commit()
+            self._maybe_commit()
 
         except Exception:
             connection.rollback()

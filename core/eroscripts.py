@@ -33,10 +33,18 @@ class EroScriptsImportResult:
     average_speed: float | None = None
 
     content_hash: str = ""
+    staged_path: str | None = None
 
     @property
     def file_size(self) -> int:
-        return len(self.content)
+        if self.content:
+            return len(self.content)
+        if self.staged_path:
+            try:
+                return Path(self.staged_path).stat().st_size
+            except OSError:
+                pass
+        return 0
 
 
 class EroScriptsImporter:
@@ -66,6 +74,7 @@ class EroScriptsImporter:
         logs_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         report_path = logs_dir / f"eroscripts_diagnostic_{stamp}.txt"
+        lightweight = len(candidates) > 15
 
         lines = [
             "xToys Library Manager - EroScripts Import Diagnostic",
@@ -77,32 +86,42 @@ class EroScriptsImporter:
             "",
         ]
 
-        try:
-            body_text = page.locator("body").inner_text(timeout=10000)
-        except Exception as exc:
-            body_text = f"<body text unavailable: {type(exc).__name__}: {exc}>"
+        if lightweight:
+            lines += [
+                "=== PAGE TEXT ===",
+                "<omitted for large import to reduce Chromium/Python memory pressure>",
+                "",
+                "=== ALL PAGE LINKS ===",
+                "<omitted for large import; candidate and association details follow>",
+                "",
+            ]
+        else:
+            try:
+                body_text = page.locator("body").inner_text(timeout=10000)
+            except Exception as exc:
+                body_text = f"<body text unavailable: {type(exc).__name__}: {exc}>"
 
-        lines += ["=== PAGE TEXT ===", body_text, ""]
+            lines += ["=== PAGE TEXT ===", body_text, ""]
 
-        try:
-            anchors = page.locator("a")
-            count = anchors.count()
-        except Exception as exc:
-            anchors = None
-            count = 0
-            lines.append(f"Could not enumerate anchors: {type(exc).__name__}: {exc}")
+            try:
+                anchors = page.locator("a")
+                count = anchors.count()
+            except Exception as exc:
+                anchors = None
+                count = 0
+                lines.append(f"Could not enumerate anchors: {type(exc).__name__}: {exc}")
 
-        lines += [f"=== ALL PAGE LINKS ({count}) ==="]
-        if anchors is not None:
-            for i in range(count):
-                try:
-                    a = anchors.nth(i)
-                    href = a.get_attribute("href") or ""
-                    text = " ".join((a.inner_text(timeout=2000) or "").split())
-                    lines.append(f"[{i+1}] text={text!r} href={href!r}")
-                except Exception as exc:
-                    lines.append(f"[{i+1}] <link read error: {type(exc).__name__}: {exc}>")
-        lines.append("")
+            lines += [f"=== ALL PAGE LINKS ({count}) ==="]
+            if anchors is not None:
+                for i in range(count):
+                    try:
+                        a = anchors.nth(i)
+                        href = a.get_attribute("href") or ""
+                        text = " ".join((a.inner_text(timeout=2000) or "").split())
+                        lines.append(f"[{i+1}] text={text!r} href={href!r}")
+                    except Exception as exc:
+                        lines.append(f"[{i+1}] <link read error: {type(exc).__name__}: {exc}>")
+            lines.append("")
 
         lines += [f"=== UNIQUE FUNSCRIPT CANDIDATES ({len(candidates)}) ==="]
         for i, (script_url, filename) in enumerate(candidates, 1):
@@ -194,9 +213,16 @@ class EroScriptsImporter:
             if not candidates:
                 raise RuntimeError("Could not find a .funscript download link on the EroScripts page.")
 
+            topic_title = self.extract_topic_title(page)
             print(f"[IMPORT] Discovery complete: {len(candidates)} funscript candidate(s). No files downloaded.")
             return [
-                {"filename": filename, "script_url": script_url, "index": index}
+                {
+                    "filename": filename,
+                    "script_url": script_url,
+                    "index": index,
+                    "page_url": url,
+                    "topic_title": topic_title,
+                }
                 for index, (script_url, filename) in enumerate(candidates)
             ]
         finally:
@@ -240,6 +266,7 @@ class EroScriptsImporter:
         destination: Path,
         selected: list[dict] | list[str],
         write_files: bool = False,
+        staging_dir: Path | None = None,
     ) -> list[EroScriptsImportResult]:
         """Download only user-selected funscripts from an EroScripts page."""
         print("\n[IMPORT] Cleaning EroScripts URL...")
@@ -281,49 +308,81 @@ class EroScriptsImporter:
             if write_files:
                 destination.mkdir(parents=True, exist_ok=True)
 
-            print(f"[IMPORT] Downloading {len(candidates)} selected attachment(s) in small batches...")
-            downloaded_content, download_errors = self.download_scripts_batch(page, candidates)
-
+            print(f"[IMPORT] Downloading {len(candidates)} selected attachment(s) in bounded chunks...")
             results = []
             failures = []
-            for number, ((script_url, filename), matched_video) in enumerate(zip(candidates, associations), start=1):
-                print(f"\n[IMPORT] Preparing selected script {number}/{len(candidates)}: {filename}")
-                content = downloaded_content.get(script_url)
-                if not content:
-                    exc = download_errors.get(script_url, "download returned no content")
-                    failures.append(f"{filename}: {exc}")
-                    print(f"[IMPORT] Skipping failed script: {filename}: {exc}")
-                    continue
+            chunk_size = 6
 
-                if write_files:
-                    output_path = destination / filename
-                    output_path.write_bytes(content)
-                    print(f"[IMPORT] Saved: {output_path}")
+            # Do not keep every downloaded attachment in RAM at once. Each chunk
+            # is decoded, hashed and staged before the next chunk is fetched.
+            # This is the main mass-import crash guard for large topics.
+            for chunk_start in range(0, len(candidates), chunk_size):
+                candidate_chunk = candidates[chunk_start:chunk_start + chunk_size]
+                association_chunk = associations[chunk_start:chunk_start + chunk_size]
+                downloaded_content, download_errors = self.download_scripts_batch(
+                    page, candidate_chunk, batch_size=chunk_size
+                )
 
-                content_hash = hashlib.sha256(content).hexdigest()
-                result_candidates = [matched_video] if matched_video else []
-                if matched_video:
-                    matched_video = dict(matched_video)
-                    detected_id = matched_video.get("video_id") or self._extract_video_id_from_url(matched_video.get("url"))
-                    if detected_id:
-                        matched_video["video_id"] = detected_id
-                    result_video_site = matched_video.get("site")
-                    result_video_url = matched_video.get("url")
-                    result_video_title = matched_video.get("title")
-                else:
-                    result_video_site = result_video_url = result_video_title = None
+                for offset, ((script_url, filename), matched_video) in enumerate(
+                    zip(candidate_chunk, association_chunk), start=1
+                ):
+                    number = chunk_start + offset
+                    print(f"\n[IMPORT] Preparing selected script {number}/{len(candidates)}: {filename}")
+                    content = downloaded_content.pop(script_url, None)
+                    if not content:
+                        exc = download_errors.get(script_url, "download returned no content")
+                        failures.append(f"{filename}: {exc}")
+                        print(f"[IMPORT] Skipping failed script: {filename}: {exc}")
+                        continue
 
-                results.append(EroScriptsImportResult(
-                    page_url=url, script_url=script_url, filename=filename,
-                    content=content, title=title, creator=metadata["creator"],
-                    tags=metadata["tags"], video_site=result_video_site,
-                    video_url=result_video_url, video_title=result_video_title,
-                    video_id=(matched_video or {}).get("video_id"),
-                    video_candidates=result_candidates,
-                    thumbnail_url=self.extract_eroscripts_thumbnail(page, script_url),
-                    duration=metadata["duration"], action_count=metadata["action_count"],
-                    average_speed=metadata["average_speed"], content_hash=content_hash
-                ))
+                    staged_path = None
+                    content_hash = hashlib.sha256(content).hexdigest()
+                    if write_files:
+                        output_path = destination / filename
+                        output_path.write_bytes(content)
+                        print(f"[IMPORT] Saved: {output_path}")
+                    elif staging_dir is not None:
+                        staging_dir.mkdir(parents=True, exist_ok=True)
+                        safe_name = self.clean_filename(filename)
+                        staged_file = staging_dir / f"{content_hash[:12]}-{safe_name}"
+                        staged_file.write_bytes(content)
+                        staged_path = str(staged_file)
+
+                    result_candidates = [matched_video] if matched_video else []
+                    if matched_video:
+                        matched_video = dict(matched_video)
+                        detected_id = matched_video.get("video_id") or self._extract_video_id_from_url(matched_video.get("url"))
+                        if detected_id:
+                            matched_video["video_id"] = detected_id
+                        result_video_site = matched_video.get("site")
+                        result_video_url = matched_video.get("url")
+                        result_video_title = matched_video.get("title")
+                    else:
+                        result_video_site = result_video_url = result_video_title = None
+
+                    results.append(EroScriptsImportResult(
+                        page_url=url, script_url=script_url, filename=filename,
+                        content=(b"" if staged_path else content), title=title, creator=metadata["creator"],
+                        tags=list(metadata["tags"]), video_site=result_video_site,
+                        video_url=result_video_url, video_title=result_video_title,
+                        video_id=(matched_video or {}).get("video_id"),
+                        video_candidates=result_candidates,
+                        thumbnail_url=self.extract_eroscripts_thumbnail(page, script_url),
+                        duration=metadata["duration"], action_count=metadata["action_count"],
+                        average_speed=metadata["average_speed"], content_hash=content_hash,
+                        staged_path=staged_path
+                    ))
+                    # If staged, release the decoded attachment immediately.
+                    if staged_path:
+                        del content
+
+                downloaded_content.clear()
+                download_errors.clear()
+                try:
+                    import gc
+                    gc.collect()
+                except Exception:
+                    pass
 
             if failures and not results:
                 raise RuntimeError("All selected funscripts failed to download:\n" + "\n".join(failures))

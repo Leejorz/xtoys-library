@@ -1,0 +1,33 @@
+xToys Library Manager - multi-topic / per-funscript tag / mass-import stability patch
+
+Built from the latest uploaded xtoys-library - Copy(4).zip baseline.
+
+Features
+- EroScripts import window now accepts multiple topic URLs, one per line.
+- All discovered funscripts are combined into one checkbox selection list.
+- Each discovered script retains its own originating EroScripts topic URL.
+- Selected scripts are grouped by topic and downloaded through one persistent login/browser session.
+- One failing topic does not discard successful topics.
+
+Per-funscript tags
+- Each funscript keeps its own tag list; topic/batch tags are no longer copied wholesale to every script.
+- After the video source is matched, the app attempts to read tags from that specific video page.
+- Generic HTML tag sources include keywords metadata, article/video tag metadata, JSON-LD keywords/genre, and visible /tag/ links.
+- Pixeldrain has no useful semantic content tags, so its funscript keeps that script's EroScripts fallback tags.
+- If a video host times out/blocks metadata access or exposes no useful tags, only that funscript falls back to its EroScripts tags.
+- The tag-review page shows the union only as a filter. Keeping a tag preserves it only on scripts where it was actually detected. Presets remain an intentional add-to-all option.
+
+Mass-import crash guards
+- Selected downloads are processed in bounded chunks of six instead of retaining the whole topic's downloaded bytes in RAM.
+- GUI imports are staged to cache/import_staging on disk; result objects do not keep large funscript byte arrays in memory.
+- Staged files are moved into funscripts/ only when Save is confirmed.
+- Cancelling the wizard removes staged files.
+- Large imports use lightweight diagnostics instead of copying the entire page body/all links into Python memory.
+- Multiple topics are processed sequentially in one browser context, with garbage collection points between topics.
+- Video metadata reads are deduplicated by source URL and capped at three workers with six-second timeouts.
+- Save uses one SQLite transaction for the whole batch instead of hundreds of commits.
+- Saved result byte buffers/staging references are released before Rebuild Library starts.
+
+Validation
+- Python compileall passed.
+- Full automated test suite: 29 passed.
