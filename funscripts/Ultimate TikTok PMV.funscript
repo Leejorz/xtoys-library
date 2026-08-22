@@ -1,0 +1,246 @@
+{
+  "channels": 1,
+  "channelData": {
+    "1": [
+      {
+        "loops": 1,
+        "steps": [
+          {
+            "end": 25,
+            "time": 31,
+            "type": "sine",
+            "start": 0
+          }
+        ]
+      },
+      {
+        "loops": 1,
+        "steps": [
+          {
+            "end": 40,
+            "time": 14,
+            "type": "sine",
+            "start": 40
+          }
+        ]
+      },
+      {
+        "loops": 1,
+        "steps": [
+          {
+            "end": 30,
+            "time": 16,
+            "type": "sine",
+            "start": 30
+          }
+        ]
+      },
+      {
+        "loops": 1,
+        "steps": [
+          {
+            "end": 67,
+            "time": 29,
+            "type": "sine",
+            "start": 67
+          }
+        ]
+      },
+      {
+        "loops": 1,
+        "steps": [
+          {
+            "end": 15,
+            "time": 15,
+            "type": "sine",
+            "start": 15
+          }
+        ]
+      },
+      {
+        "loops": 1,
+        "steps": [
+          {
+            "end": 30,
+            "time": 15,
+            "type": "sine",
+            "start": 15
+          }
+        ]
+      },
+      {
+        "loops": 1,
+        "steps": [
+          {
+            "end": 70,
+            "time": 30,
+            "type": "sine",
+            "start": 70
+          }
+        ]
+      },
+      {
+        "loops": 1,
+        "steps": [
+          {
+            "end": 30,
+            "time": 38,
+            "type": "sine",
+            "start": 15
+          }
+        ]
+      },
+      {
+        "loops": 1,
+        "steps": [
+          {
+            "end": 70,
+            "time": 15,
+            "type": "sine",
+            "start": 70
+          }
+        ]
+      },
+      {
+        "loops": 1,
+        "steps": [
+          {
+            "end": 75,
+            "time": 30,
+            "type": "sine",
+            "start": 75
+          }
+        ]
+      },
+      {
+        "loops": 1,
+        "steps": [
+          {
+            "end": 80,
+            "time": 14,
+            "type": "sine",
+            "start": 80
+          }
+        ]
+      },
+      {
+        "loops": 1,
+        "steps": [
+          {
+            "end": 15,
+            "time": 2,
+            "type": "sine",
+            "start": 80
+          },
+          {
+            "end": 15,
+            "time": 16,
+            "type": "sine",
+            "start": 15
+          }
+        ]
+      },
+      {
+        "loops": 1,
+        "steps": [
+          {
+            "end": 90,
+            "time": 28,
+            "type": "sine",
+            "start": 90
+          }
+        ]
+      },
+      {
+        "loops": 1,
+        "steps": [
+          {
+            "end": 100,
+            "time": 5,
+            "type": "sine",
+            "start": 100
+          }
+        ]
+      },
+      {
+        "loops": 1,
+        "steps": [
+          {
+            "end": 85,
+            "time": 2,
+            "type": "sine",
+            "start": 85
+          }
+        ]
+      },
+      {
+        "loops": 1,
+        "steps": [
+          {
+            "end": 100,
+            "time": 4,
+            "type": "sine",
+            "start": 100
+          }
+        ]
+      },
+      {
+        "loops": 1,
+        "steps": [
+          {
+            "end": 80,
+            "time": 3,
+            "type": "sine",
+            "start": 80
+          }
+        ]
+      },
+      {
+        "loops": 1,
+        "steps": [
+          {
+            "end": 100,
+            "time": 5,
+            "type": "sine",
+            "start": 100
+          }
+        ]
+      },
+      {
+        "loops": 1,
+        "steps": [
+          {
+            "end": 75,
+            "time": 2,
+            "type": "sine",
+            "start": 75
+          }
+        ]
+      },
+      {
+        "loops": 1,
+        "steps": [
+          {
+            "end": 100,
+            "time": 6,
+            "type": "sine",
+            "start": 100
+          }
+        ]
+      },
+      {
+        "loops": 1,
+        "steps": [
+          {
+            "end": 0,
+            "time": 12,
+            "type": "sine",
+            "start": 100
+          }
+        ]
+      }
+    ]
+  },
+  "suctionReleaseControl": false,
+  "frequencyControl": false
+}

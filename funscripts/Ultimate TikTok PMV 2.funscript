@@ -1,0 +1,191 @@
+{
+  "channels": 1,
+  "channelData": {
+    "1": [
+      {
+        "loops": 1,
+        "steps": [
+          {
+            "end": 0,
+            "time": 10,
+            "type": "sine",
+            "start": 0
+          }
+        ]
+      },
+      {
+        "loops": 1,
+        "steps": [
+          {
+            "end": 20,
+            "time": 37,
+            "type": "sine",
+            "start": 0
+          }
+        ]
+      },
+      {
+        "loops": 1,
+        "steps": [
+          {
+            "end": 58,
+            "time": 17,
+            "type": "sine",
+            "start": 30
+          }
+        ]
+      },
+      {
+        "loops": 1,
+        "steps": [
+          {
+            "end": 58,
+            "time": 15,
+            "type": "sine",
+            "start": 58
+          }
+        ]
+      },
+      {
+        "loops": 1,
+        "steps": [
+          {
+            "end": 40,
+            "time": 19,
+            "type": "sine",
+            "start": 40
+          }
+        ]
+      },
+      {
+        "loops": 1,
+        "steps": [
+          {
+            "end": 62,
+            "time": 35,
+            "type": "sine",
+            "start": 62
+          }
+        ]
+      },
+      {
+        "loops": 1,
+        "steps": [
+          {
+            "end": 20,
+            "time": 15,
+            "type": "sine",
+            "start": 20
+          }
+        ]
+      },
+      {
+        "loops": 1,
+        "steps": [
+          {
+            "end": 40,
+            "time": 16,
+            "type": "sine",
+            "start": 40
+          }
+        ]
+      },
+      {
+        "loops": 1,
+        "steps": [
+          {
+            "end": 20,
+            "time": 15,
+            "type": "sine",
+            "start": 20
+          }
+        ]
+      },
+      {
+        "loops": 1,
+        "steps": [
+          {
+            "end": 65,
+            "time": 31,
+            "type": "sine",
+            "start": 65
+          }
+        ]
+      },
+      {
+        "loops": 1,
+        "steps": [
+          {
+            "end": 25,
+            "time": 8,
+            "type": "sine",
+            "start": 25
+          }
+        ]
+      },
+      {
+        "loops": 1,
+        "steps": [
+          {
+            "end": 50,
+            "time": 50,
+            "type": "sine",
+            "start": 50
+          }
+        ]
+      },
+      {
+        "loops": 1,
+        "steps": [
+          {
+            "end": 70,
+            "time": 30,
+            "type": "sine",
+            "start": 70
+          }
+        ]
+      },
+      {
+        "loops": 1,
+        "steps": [
+          {
+            "end": 20,
+            "time": 31,
+            "type": "sine",
+            "start": 40
+          }
+        ]
+      },
+      {
+        "loops": 1,
+        "steps": [
+          {
+            "end": 100,
+            "time": 31,
+            "type": "sine",
+            "start": 80
+          }
+        ]
+      },
+      {
+        "loops": 1,
+        "steps": [
+          {
+            "end": 0,
+            "time": 5,
+            "type": "sine",
+            "start": 100
+          },
+          {
+            "end": 0,
+            "time": 6,
+            "type": "sine",
+            "start": 0
+          }
+        ]
+      }
+    ]
+  },
+  "suctionReleaseControl": false,
+  "frequencyControl": false
+}
