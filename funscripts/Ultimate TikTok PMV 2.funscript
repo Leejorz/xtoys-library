@@ -1,191 +1,23 @@
 {
-  "channels": 1,
-  "channelData": {
-    "1": [
-      {
-        "loops": 1,
-        "steps": [
-          {
-            "end": 0,
-            "time": 10,
-            "type": "sine",
-            "start": 0
-          }
-        ]
-      },
-      {
-        "loops": 1,
-        "steps": [
-          {
-            "end": 20,
-            "time": 37,
-            "type": "sine",
-            "start": 0
-          }
-        ]
-      },
-      {
-        "loops": 1,
-        "steps": [
-          {
-            "end": 58,
-            "time": 17,
-            "type": "sine",
-            "start": 30
-          }
-        ]
-      },
-      {
-        "loops": 1,
-        "steps": [
-          {
-            "end": 58,
-            "time": 15,
-            "type": "sine",
-            "start": 58
-          }
-        ]
-      },
-      {
-        "loops": 1,
-        "steps": [
-          {
-            "end": 40,
-            "time": 19,
-            "type": "sine",
-            "start": 40
-          }
-        ]
-      },
-      {
-        "loops": 1,
-        "steps": [
-          {
-            "end": 62,
-            "time": 35,
-            "type": "sine",
-            "start": 62
-          }
-        ]
-      },
-      {
-        "loops": 1,
-        "steps": [
-          {
-            "end": 20,
-            "time": 15,
-            "type": "sine",
-            "start": 20
-          }
-        ]
-      },
-      {
-        "loops": 1,
-        "steps": [
-          {
-            "end": 40,
-            "time": 16,
-            "type": "sine",
-            "start": 40
-          }
-        ]
-      },
-      {
-        "loops": 1,
-        "steps": [
-          {
-            "end": 20,
-            "time": 15,
-            "type": "sine",
-            "start": 20
-          }
-        ]
-      },
-      {
-        "loops": 1,
-        "steps": [
-          {
-            "end": 65,
-            "time": 31,
-            "type": "sine",
-            "start": 65
-          }
-        ]
-      },
-      {
-        "loops": 1,
-        "steps": [
-          {
-            "end": 25,
-            "time": 8,
-            "type": "sine",
-            "start": 25
-          }
-        ]
-      },
-      {
-        "loops": 1,
-        "steps": [
-          {
-            "end": 50,
-            "time": 50,
-            "type": "sine",
-            "start": 50
-          }
-        ]
-      },
-      {
-        "loops": 1,
-        "steps": [
-          {
-            "end": 70,
-            "time": 30,
-            "type": "sine",
-            "start": 70
-          }
-        ]
-      },
-      {
-        "loops": 1,
-        "steps": [
-          {
-            "end": 20,
-            "time": 31,
-            "type": "sine",
-            "start": 40
-          }
-        ]
-      },
-      {
-        "loops": 1,
-        "steps": [
-          {
-            "end": 100,
-            "time": 31,
-            "type": "sine",
-            "start": 80
-          }
-        ]
-      },
-      {
-        "loops": 1,
-        "steps": [
-          {
-            "end": 0,
-            "time": 5,
-            "type": "sine",
-            "start": 100
-          },
-          {
-            "end": 0,
-            "time": 6,
-            "type": "sine",
-            "start": 0
-          }
-        ]
-      }
-    ]
-  },
-  "suctionReleaseControl": false,
-  "frequencyControl": false
+  "version": "1.0",
+  "range": 100,
+  "actions": [
+    { "at": 1000, "pos": 0 },
+    { "at": 4700, "pos": 20 },
+    { "at": 6400, "pos": 58 },
+    { "at": 7900, "pos": 58 },
+    { "at": 9800, "pos": 40 },
+    { "at": 13300, "pos": 62 },
+    { "at": 14800, "pos": 20 },
+    { "at": 16400, "pos": 40 },
+    { "at": 17900, "pos": 20 },
+    { "at": 21000, "pos": 65 },
+    { "at": 21800, "pos": 25 },
+    { "at": 26800, "pos": 50 },
+    { "at": 29800, "pos": 70 },
+    { "at": 32900, "pos": 20 },
+    { "at": 36000, "pos": 100 },
+    { "at": 36500, "pos": 0 },
+    { "at": 37100, "pos": 0 }
+  ]
 }

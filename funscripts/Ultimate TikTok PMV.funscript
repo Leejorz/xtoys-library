@@ -1,246 +1,28 @@
 {
-  "channels": 1,
-  "channelData": {
-    "1": [
-      {
-        "loops": 1,
-        "steps": [
-          {
-            "end": 25,
-            "time": 31,
-            "type": "sine",
-            "start": 0
-          }
-        ]
-      },
-      {
-        "loops": 1,
-        "steps": [
-          {
-            "end": 40,
-            "time": 14,
-            "type": "sine",
-            "start": 40
-          }
-        ]
-      },
-      {
-        "loops": 1,
-        "steps": [
-          {
-            "end": 30,
-            "time": 16,
-            "type": "sine",
-            "start": 30
-          }
-        ]
-      },
-      {
-        "loops": 1,
-        "steps": [
-          {
-            "end": 67,
-            "time": 29,
-            "type": "sine",
-            "start": 67
-          }
-        ]
-      },
-      {
-        "loops": 1,
-        "steps": [
-          {
-            "end": 15,
-            "time": 15,
-            "type": "sine",
-            "start": 15
-          }
-        ]
-      },
-      {
-        "loops": 1,
-        "steps": [
-          {
-            "end": 30,
-            "time": 15,
-            "type": "sine",
-            "start": 15
-          }
-        ]
-      },
-      {
-        "loops": 1,
-        "steps": [
-          {
-            "end": 70,
-            "time": 30,
-            "type": "sine",
-            "start": 70
-          }
-        ]
-      },
-      {
-        "loops": 1,
-        "steps": [
-          {
-            "end": 30,
-            "time": 38,
-            "type": "sine",
-            "start": 15
-          }
-        ]
-      },
-      {
-        "loops": 1,
-        "steps": [
-          {
-            "end": 70,
-            "time": 15,
-            "type": "sine",
-            "start": 70
-          }
-        ]
-      },
-      {
-        "loops": 1,
-        "steps": [
-          {
-            "end": 75,
-            "time": 30,
-            "type": "sine",
-            "start": 75
-          }
-        ]
-      },
-      {
-        "loops": 1,
-        "steps": [
-          {
-            "end": 80,
-            "time": 14,
-            "type": "sine",
-            "start": 80
-          }
-        ]
-      },
-      {
-        "loops": 1,
-        "steps": [
-          {
-            "end": 15,
-            "time": 2,
-            "type": "sine",
-            "start": 80
-          },
-          {
-            "end": 15,
-            "time": 16,
-            "type": "sine",
-            "start": 15
-          }
-        ]
-      },
-      {
-        "loops": 1,
-        "steps": [
-          {
-            "end": 90,
-            "time": 28,
-            "type": "sine",
-            "start": 90
-          }
-        ]
-      },
-      {
-        "loops": 1,
-        "steps": [
-          {
-            "end": 100,
-            "time": 5,
-            "type": "sine",
-            "start": 100
-          }
-        ]
-      },
-      {
-        "loops": 1,
-        "steps": [
-          {
-            "end": 85,
-            "time": 2,
-            "type": "sine",
-            "start": 85
-          }
-        ]
-      },
-      {
-        "loops": 1,
-        "steps": [
-          {
-            "end": 100,
-            "time": 4,
-            "type": "sine",
-            "start": 100
-          }
-        ]
-      },
-      {
-        "loops": 1,
-        "steps": [
-          {
-            "end": 80,
-            "time": 3,
-            "type": "sine",
-            "start": 80
-          }
-        ]
-      },
-      {
-        "loops": 1,
-        "steps": [
-          {
-            "end": 100,
-            "time": 5,
-            "type": "sine",
-            "start": 100
-          }
-        ]
-      },
-      {
-        "loops": 1,
-        "steps": [
-          {
-            "end": 75,
-            "time": 2,
-            "type": "sine",
-            "start": 75
-          }
-        ]
-      },
-      {
-        "loops": 1,
-        "steps": [
-          {
-            "end": 100,
-            "time": 6,
-            "type": "sine",
-            "start": 100
-          }
-        ]
-      },
-      {
-        "loops": 1,
-        "steps": [
-          {
-            "end": 0,
-            "time": 12,
-            "type": "sine",
-            "start": 100
-          }
-        ]
-      }
-    ]
-  },
-  "suctionReleaseControl": false,
-  "frequencyControl": false
+  "version": "1.0",
+  "range": 100,
+  "actions": [
+    { "at": 3100, "pos": 25 },
+    { "at": 4500, "pos": 40 },
+    { "at": 6100, "pos": 30 },
+    { "at": 9000, "pos": 67 },
+    { "at": 10500, "pos": 15 },
+    { "at": 12000, "pos": 30 },
+    { "at": 15000, "pos": 70 },
+    { "at": 18800, "pos": 30 },
+    { "at": 20300, "pos": 70 },
+    { "at": 23300, "pos": 75 },
+    { "at": 24700, "pos": 80 },
+    { "at": 24900, "pos": 15 },
+    { "at": 26500, "pos": 15 },
+    { "at": 29300, "pos": 90 },
+    { "at": 29800, "pos": 100 },
+    { "at": 30000, "pos": 85 },
+    { "at": 30400, "pos": 100 },
+    { "at": 30700, "pos": 80 },
+    { "at": 31200, "pos": 100 },
+    { "at": 31400, "pos": 75 },
+    { "at": 32000, "pos": 100 },
+    { "at": 33200, "pos": 0 }
+  ]
 }
