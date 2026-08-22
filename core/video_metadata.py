@@ -92,6 +92,106 @@ class VideoMetadataExtractor:
             thumbnail_url=ThumbnailExtractor.extract_from_html(text, url),
         )
 
+
+    @classmethod
+    def fetch_rule34video_rendered(cls, page, source_url: str, timeout_ms: int = 10000) -> VideoPageMetadata:
+        """Read Rule34Video metadata from the rendered browser DOM.
+
+        Rule34Video can inject the per-video tag pills after the initial HTML
+        response, so urllib/raw-HTML parsing may see no tags even though they
+        are visible in the browser.  This helper intentionally reads only the
+        explicit Tags row whose nearby sibling is the Download row.
+        """
+        if page is None or not source_url:
+            return VideoPageMetadata([])
+        try:
+            page.goto(source_url, wait_until="domcontentloaded", timeout=timeout_ms)
+            # Give client-side video metadata a short bounded window to hydrate.
+            try:
+                page.wait_for_timeout(500)
+            except Exception:
+                pass
+            data = page.evaluate(r"""() => {
+                const norm = (v) => (v || '').replace(/\s+/g, ' ').trim();
+                const isTagHref = (href) => {
+                    try {
+                        const p = new URL(href, location.href).pathname.toLowerCase();
+                        return /\/(?:tag|tags)\//.test(p);
+                    } catch (_) { return false; }
+                };
+                const visible = (el) => {
+                    if (!el) return false;
+                    const st = getComputedStyle(el);
+                    return st.display !== 'none' && st.visibility !== 'hidden';
+                };
+                const exactLabel = (el, value) => visible(el) && norm(el.textContent).toLowerCase() === value;
+                const labels = Array.from(document.querySelectorAll('span,strong,b,div,dt,th,label,p'))
+                    .filter(el => exactLabel(el, 'tags'));
+                const candidates = [];
+
+                for (const label of labels) {
+                    let row = label;
+                    for (let depth = 0; depth < 6 && row; depth++, row = row.parentElement) {
+                        const anchors = Array.from(row.querySelectorAll('a[href]'))
+                            .filter(a => visible(a) && isTagHref(a.href));
+                        if (!anchors.length) continue;
+
+                        // The real Rule34Video Tags row sits immediately before
+                        // the Download row in the video's info panel.  Require a
+                        // nearby following sibling with an explicit Download label.
+                        let sibling = row.nextElementSibling;
+                        let hasDownload = false;
+                        for (let i = 0; sibling && i < 4; i++, sibling = sibling.nextElementSibling) {
+                            const text = norm(sibling.textContent).toLowerCase();
+                            if (text === 'download' || text.startsWith('download ')) {
+                                hasDownload = true;
+                                break;
+                            }
+                            const dl = Array.from(sibling.querySelectorAll('span,strong,b,div,dt,th,label,p'))
+                                .some(el => exactLabel(el, 'download'));
+                            if (dl) { hasDownload = true; break; }
+                        }
+                        if (!hasDownload) continue;
+
+                        const tags = [];
+                        const seen = new Set();
+                        for (const a of anchors) {
+                            const tag = norm(a.textContent).replace(/^\+\s*/, '');
+                            const key = tag.toLowerCase();
+                            if (!tag || tag.length > 60 || key === 'suggest' || key === 'tags' || seen.has(key)) continue;
+                            seen.add(key);
+                            tags.push(tag);
+                            if (tags.length >= 30) break;
+                        }
+                        if (tags.length) candidates.push({depth, tags});
+                        break;
+                    }
+                }
+                candidates.sort((a,b) => a.depth - b.depth || b.tags.length - a.tags.length);
+
+                let thumbnail = null;
+                const meta = document.querySelector('meta[property="og:image"],meta[name="twitter:image"]');
+                if (meta) thumbnail = meta.content || null;
+                if (!thumbnail) {
+                    const video = document.querySelector('video[poster]');
+                    if (video) thumbnail = video.poster || video.getAttribute('poster');
+                }
+                return {tags: candidates.length ? candidates[0].tags : [], thumbnail};
+            }""")
+            tags = []
+            for value in (data or {}).get("tags", []):
+                tag = cls._clean_tag(value)
+                # Rule34's own explicit tag row is authoritative; unlike generic
+                # metadata, PMV/HMV are valid intentional tags here.
+                if not tag and str(value).strip().casefold() in {"pmv", "hmv"}:
+                    tag = str(value).strip()
+                if tag and tag.casefold() not in {t.casefold() for t in tags}:
+                    tags.append(tag)
+            thumb = (data or {}).get("thumbnail") or None
+            return VideoPageMetadata(tags[:30], thumb)
+        except Exception:
+            return VideoPageMetadata([])
+
     @classmethod
     def _clean_tag(cls, value: object) -> str | None:
         if value is None:
@@ -113,55 +213,93 @@ class VideoMetadataExtractor:
     def extract_rule34video_tags(cls, text: str) -> list[str]:
         """Return only tags from Rule34Video's explicit per-video Tags row.
 
-        The site repeats tag links in navigation/recommendations, so a whole-page
-        /tags/ scrape produces unrelated labels.  Anchor extraction is therefore
-        restricted to the markup between the visible ``Tags`` label and the next
-        ``Download`` section.
+        Rule34Video repeats tag links in navigation and recommendations.  The
+        video information panel places its real Tags row immediately before the
+        Download row, but the labels can be wrapped in icons/spans and therefore
+        are not reliably represented as a simple ``>Tags<`` token.
+
+        We consequently evaluate every visible Download marker, walk backwards
+        to the nearest standalone Tags marker, and accept only /tag(s)/ anchors
+        between those two markers.  If no high-confidence row can be isolated,
+        return [] rather than guessing from the rest of the page.
         """
         if not text:
             return []
 
-        # Locate the visible metadata-row label rather than metadata keywords.
-        start_match = re.search(r">\s*Tags\s*<", text, flags=re.I)
-        if not start_match:
-            return []
-        start = start_match.end()
-        # The tag pills sit immediately before the Download row on current pages.
-        tail = text[start:start + 16000]
-        stop_match = re.search(r">\s*Download\s*<", tail, flags=re.I)
-        if stop_match:
-            tail = tail[:stop_match.start()]
+        def clean_visible(value: str) -> str:
+            value = re.sub(r"<script\b[^>]*>.*?</script>", " ", value, flags=re.I | re.S)
+            value = re.sub(r"<style\b[^>]*>.*?</style>", " ", value, flags=re.I | re.S)
+            value = html.unescape(re.sub(r"<[^>]+>", " ", value))
+            return re.sub(r"\s+", " ", value).strip()
 
-        found: list[str] = []
-        seen: set[str] = set()
-        for match in re.finditer(r"<a\b([^>]*)>(.*?)</a>", tail, flags=re.I | re.S):
-            attrs, body = match.group(1), match.group(2)
-            href_match = re.search(r"\bhref\s*=\s*['\"]([^'\"]+)['\"]", attrs, flags=re.I)
-            href = html.unescape(href_match.group(1)) if href_match else ""
-            path = urlparse(href).path.lower() if href else ""
-            # Rule34Video's actual video tags use /tags/... links.
-            if not re.search(r"/(?:tag|tags)/", path):
+        # Match label text even when the site wraps it in spans/icons.  Avoid
+        # attribute values by requiring a nearby tag boundary on at least one
+        # side, then verify the candidate through the anchors found between the
+        # Tags and Download labels.
+        label_pattern = lambda label: re.compile(
+            rf">\s*(?:<[^>]+>\s*){{0,5}}{label}\s*(?:</[^>]+>\s*){{0,5}}<",
+            flags=re.I,
+        )
+        download_matches = list(label_pattern("Download").finditer(text))
+        candidates: list[tuple[int, int, list[str]]] = []
+
+        for download_match in download_matches:
+            download_pos = download_match.start()
+            # The info panel is compact; a 40 KB window is intentionally broad
+            # enough for minified HTML while still excluding most page chrome.
+            window_start = max(0, download_pos - 40000)
+            before_download = text[window_start:download_pos]
+            tag_matches = list(label_pattern("Tags").finditer(before_download))
+            if not tag_matches:
                 continue
-            label = html.unescape(re.sub(r"<[^>]+>", " ", body))
-            tag = re.sub(r"\s+", " ", label).strip(" \t\r\n,;|/#")
-            # The explicit Rule34Video Tags row is already high confidence, so
-            # keep meaningful labels such as PMV/HMV that the generic scraper
-            # intentionally suppresses on noisier sites.
-            if (
-                not tag
-                or len(tag) > 60
-                or not re.search(r"[A-Za-z0-9]", tag)
-                or tag.casefold() in {"suggest", "+ suggest", "video", "download", "tags"}
-            ):
-                continue
-            key = tag.casefold()
-            if key in seen:
-                continue
-            seen.add(key)
-            found.append(tag)
-            if len(found) >= 20:
-                break
-        return found
+
+            # Work backwards because the correct row is the nearest Tags label
+            # before this Download row.  If a nearer 'Tags' token appears in an
+            # attribute/script and produces no /tags/ anchors, try the previous
+            # candidate rather than falling back to the whole page.
+            for tag_match in reversed(tag_matches[-8:]):
+                region_start = window_start + max(tag_match.start(), tag_match.end() - 1)
+                region = text[region_start:download_pos]
+                if len(region) > 16000:
+                    continue
+
+                found: list[str] = []
+                seen: set[str] = set()
+                for match in re.finditer(r"<a\b([^>]*)>(.*?)</a>", region, flags=re.I | re.S):
+                    attrs, body = match.group(1), match.group(2)
+                    href_match = re.search(r"\bhref\s*=\s*['\"]([^'\"]+)['\"]", attrs, flags=re.I)
+                    href = html.unescape(href_match.group(1)) if href_match else ""
+                    path = urlparse(href).path.lower() if href else ""
+                    if not re.search(r"/(?:tag|tags)/", path):
+                        continue
+
+                    tag = clean_visible(body).strip(" \t\r\n,;|/#")
+                    if (
+                        not tag
+                        or len(tag) > 60
+                        or not re.search(r"[A-Za-z0-9]", tag)
+                        or tag.casefold() in {"suggest", "+ suggest", "video", "download", "tags"}
+                    ):
+                        continue
+                    key = tag.casefold()
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    found.append(tag)
+                    if len(found) >= 20:
+                        break
+
+                if found:
+                    # Prefer the row closest to Download.  A shorter Tags->Download
+                    # span is much less likely to be navigation/recommendation UI.
+                    distance = download_pos - region_start
+                    candidates.append((distance, -len(found), found))
+                    break
+
+        if not candidates:
+            return []
+        candidates.sort(key=lambda item: (item[0], item[1]))
+        return candidates[0][2]
 
     @classmethod
     def extract_tags_from_html(cls, text: str, base_url: str = "") -> list[str]:

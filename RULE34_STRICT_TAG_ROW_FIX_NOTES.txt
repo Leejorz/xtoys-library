@@ -1,0 +1,14 @@
+Rule34Video strict per-video tag row fix
+
+- Finds the explicit Rule34Video Tags row immediately before the Download row.
+- Handles nested label markup such as spans/icons/strong tags.
+- Reads only /tag/ or /tags/ links inside that row.
+- Ignores navigation, recommendations, categories, artists, uploader data,
+  page-wide keyword metadata, and unrelated tag clouds.
+- If the explicit Rule34 tag row cannot be isolated, the funscript gets no
+  Rule34 tags instead of falling back to broad EroScripts topic tags.
+- Preserves the Download & Detect double-click video-source editor from the
+  previous patch.
+
+Validation:
+- Full test suite: 32 passed.

@@ -1,0 +1,23 @@
+Rule34Video rendered-DOM tag extraction fix
+
+Built from the latest uploaded project ZIP.
+
+Changes:
+- Rule34Video tag enrichment now reuses the importer's existing Playwright browser.
+- The importer visits each matched Rule34Video page and reads the rendered DOM
+  after client-side content has had time to hydrate.
+- Only the explicit Tags row with a nearby following Download row is accepted.
+- Only tag/tag(s) links inside that row are collected.
+- Navigation, recommendations, categories, artists, uploader information and
+  unrelated tag clouds remain excluded.
+- The existing strict raw-HTML parser remains as a fallback.
+- Rule34Video still does NOT fall back to broad EroScripts topic tags if both
+  rendered-DOM and strict HTML extraction fail.
+- Other video hosts keep the existing lightweight metadata path.
+- The Download & Detect double-click source editor remains unchanged.
+
+Regression example:
+https://rule34video.com/video/4099918/mirko-hmv-hopping-into-trouble/
+
+Validation:
+33 tests passed.

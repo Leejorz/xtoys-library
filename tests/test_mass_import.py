@@ -106,3 +106,72 @@ def test_rule34video_uses_only_explicit_video_tags_row():
         "tifa lockhart (final fantasy)",
         "big black cock",
     ]
+
+
+def test_rule34video_tags_row_allows_wrapped_labels_and_ignores_other_tag_clouds():
+    html = r"""
+    <html><body>
+      <nav><a href="/tags/mintthara/">mintthara (baldurs gate)</a>
+           <a href="/tags/lady-maria/">lady maria of the astral clocktower (bloodborne)</a></nav>
+      <section class="video-info">
+        <div class="row"><span class="label"><i></i>Categories</span><a href="/categories/3d/">3D</a></div>
+        <div class="row"><span class="label"><i></i>Artist</span><a href="/artists/foo/">Foo</a></div>
+        <div class="row tags"><span class="label"><svg></svg><strong>Tags</strong></span>
+          <a class="tag" href="https://rule34video.com/tags/rumi-usagiyama/">rumi usagiyama (my hero academia)</a>
+          <a class="tag" href="/tags/bunny-girl/"><span>bunny girl</span></a>
+          <a class="tag" href="/tags/ebony/">ebony</a>
+          <a class="tag" href="/tags/compilation/">compilation</a>
+          <button>+ Suggest</button>
+        </div>
+        <div class="row download"><span class="label"><i></i><b>Download</b></span>
+          <a href="/get/1080">MP4 1080p</a>
+        </div>
+      </section>
+      <aside><a href="/tags/recommendation-junk/">Recommendation Junk</a></aside>
+    </body></html>
+    """
+    assert VideoMetadataExtractor.extract_rule34video_tags(html) == [
+        "rumi usagiyama (my hero academia)",
+        "bunny girl",
+        "ebony",
+        "compilation",
+    ]
+
+
+def test_rule34video_no_explicit_tags_row_returns_empty_instead_of_page_tags():
+    html = r"""
+    <html><body>
+      <a href="/tags/mintthara/">mintthara (baldurs gate)</a>
+      <a href="/tags/crash-bandicoot/">crash bandicoot (crash)</a>
+      <div><span>Download</span><a href="/get/video">MP4</a></div>
+    </body></html>
+    """
+    assert VideoMetadataExtractor.extract_rule34video_tags(html) == []
+
+
+def test_rule34video_rendered_dom_metadata_uses_page_evaluate():
+    class FakePage:
+        def __init__(self):
+            self.visited = None
+
+        def goto(self, url, wait_until=None, timeout=None):
+            self.visited = url
+
+        def wait_for_timeout(self, ms):
+            pass
+
+        def evaluate(self, script):
+            assert "Download" in script
+            return {
+                "tags": ["mirko (my hero academia)", "bunny girl", "pmv"],
+                "thumbnail": "https://rule34video.com/thumb.jpg",
+            }
+
+    page = FakePage()
+    metadata = VideoMetadataExtractor.fetch_rule34video_rendered(
+        page,
+        "https://rule34video.com/video/4099918/mirko-hmv-hopping-into-trouble/",
+    )
+    assert page.visited.endswith("/video/4099918/mirko-hmv-hopping-into-trouble/")
+    assert metadata.tags == ["mirko (my hero academia)", "bunny girl", "pmv"]
+    assert metadata.thumbnail_url == "https://rule34video.com/thumb.jpg"

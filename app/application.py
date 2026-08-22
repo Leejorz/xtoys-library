@@ -1112,7 +1112,7 @@ class Application:
         finally:
             auth.close()
 
-    def _enrich_import_results_from_video_sources(self, results) -> None:
+    def _enrich_import_results_from_video_sources(self, results, browser_context=None) -> None:
         """Give each funscript its own video-page tags and thumbnail.
 
         EroScripts topic tags stay attached to each result as a fallback. Remote
@@ -1138,10 +1138,24 @@ class Application:
                 by_url.setdefault(url, []).append(result)
 
         metadata_by_url = {}
-        with ThreadPoolExecutor(max_workers=min(3, max(1, len(by_url)))) as pool:
+
+        # Rule34Video often injects its per-video tag pills after the initial
+        # HTML response.  When the importer already owns a Playwright context,
+        # reuse it and read the rendered DOM so we get the tags the user can
+        # actually see.  Other hosts keep the lightweight bounded HTTP path.
+        rule34_urls = []
+        http_urls = []
+        for url in by_url:
+            host = (urlparse(url).hostname or "").lower().removeprefix("www.")
+            if host == "rule34video.com" or host.endswith(".rule34video.com"):
+                rule34_urls.append(url)
+            else:
+                http_urls.append(url)
+
+        with ThreadPoolExecutor(max_workers=min(3, max(1, len(http_urls)))) as pool:
             future_map = {
                 pool.submit(VideoMetadataExtractor.fetch, url, 6.0): url
-                for url in by_url
+                for url in http_urls
             }
             for future in as_completed(future_map):
                 url = future_map[future]
@@ -1150,13 +1164,45 @@ class Application:
                 except Exception:
                     metadata_by_url[url] = None
 
+        if rule34_urls and browser_context is not None:
+            page = None
+            try:
+                page = browser_context.new_page()
+                for url in rule34_urls:
+                    rendered = VideoMetadataExtractor.fetch_rule34video_rendered(page, url, 10000)
+                    if rendered.tags:
+                        metadata_by_url[url] = rendered
+                    else:
+                        # Keep the existing strict raw-HTML parser as a fallback,
+                        # but never fall back to broad EroScripts tags for Rule34.
+                        metadata_by_url[url] = VideoMetadataExtractor.fetch(url, 6.0)
+            except Exception:
+                for url in rule34_urls:
+                    metadata_by_url[url] = VideoMetadataExtractor.fetch(url, 6.0)
+            finally:
+                if page is not None:
+                    try:
+                        page.close()
+                    except Exception:
+                        pass
+        else:
+            for url in rule34_urls:
+                metadata_by_url[url] = VideoMetadataExtractor.fetch(url, 6.0)
+
         for result in items:
             url = self.normalize_url(getattr(result, "video_url", None))
             metadata = metadata_by_url.get(url) if url else None
             source_tags = list(getattr(metadata, "tags", []) or []) if metadata else []
             # Crucial behavior: tags are assigned per funscript. Never union tags
             # across a topic/batch. Only this result's source can replace its tags.
-            result.tags = source_tags or fallbacks[id(result)]
+            # For Rule34Video specifically, do NOT silently fall back to broad
+            # EroScripts topic tags when the source-page scrape fails; an empty
+            # tag list is safer than mislabeling this individual funscript.
+            host = (urlparse(url).hostname or "").lower().removeprefix("www.") if url else ""
+            if host == "rule34video.com" or host.endswith(".rule34video.com"):
+                result.tags = source_tags
+            else:
+                result.tags = source_tags or fallbacks[id(result)]
             thumb = getattr(metadata, "thumbnail_url", None) if metadata else None
             if thumb:
                 result.thumbnail_url = thumb
@@ -1221,7 +1267,7 @@ class Application:
                 for failure in failures:
                     print(f"[IMPORT]   {failure}")
 
-            self._enrich_import_results_from_video_sources(all_results)
+            self._enrich_import_results_from_video_sources(all_results, browser_context=auth.context)
 
             if persist:
                 self.save_eroscripts_import_batch(all_results)
